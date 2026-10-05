@@ -1,0 +1,50 @@
+version: 2
+
+project_name: policedoc
+
+builds:
+  - main: ./cmd/policedoc
+    binary: policedoc
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+
+archives:
+  - formats: [tar.gz]
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+
+release:
+  prerelease: auto
+
+brews:
+  - repository:
+      owner: sorafujitani
+      name: homebrew-tap
+      branch: main
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    directory: Formula
+    commit_author:
+      name: fujitani sora
+      email: fujitanisora0414@gmail.com
+    homepage: "https://github.com/sorafujitani/police-doc"
+    description: "Check CLI examples in Markdown using installed executables"
+    license: MIT
+    skip_upload: auto
+    install: |
+      bin.install "policedoc"
+    test: |
+      assert_match "policedoc #{version}", shell_output("#{bin}/policedoc version")
