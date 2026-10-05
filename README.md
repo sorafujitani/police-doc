@@ -6,9 +6,48 @@ No configuration or manually maintained specification is needed.
 `scan` never executes document examples. It does start executables for version and help requests.
 Use only trusted documents and binaries.
 
-## Build and run
+## Install
 
-Use Go 1.27.1 to build the single binary:
+### Go
+
+```sh
+go install github.com/sorafujitani/police-doc/cmd/policedoc@latest
+```
+
+Go 1.27.1 or later is required. Add `$(go env GOPATH)/bin` to `PATH`, or use your
+custom `GOBIN` directory.
+
+### Nix
+
+With flakes enabled, install on Linux or macOS (x86-64 or ARM64):
+
+```sh
+nix profile install github:sorafujitani/police-doc#policedoc
+```
+
+Or run without installing:
+
+```sh
+nix run github:sorafujitani/police-doc -- scan README.md docs/
+```
+
+### Homebrew
+
+Install a tagged release from https://github.com/sorafujitani/homebrew-tap:
+
+```sh
+brew install sorafujitani/tap/policedoc
+```
+
+If Homebrew requests trust, run `brew trust --formula sorafujitani/tap/policedoc`
+and retry the installation.
+
+Homebrew packages are available after the first stable release is published.
+They include prebuilt binaries for Linux and macOS (x86-64 and ARM64).
+
+### Build from source
+
+Use Go 1.27.1 or later to build the single binary:
 
 ```sh
 go build -o policedoc ./cmd/policedoc
@@ -108,5 +147,26 @@ Optional integration tests use installed Go, Git, Node.js, Python, uv, and ripgr
 ```sh
 POLICEDOC_REAL_CLI_TESTS=1 go test ./internal/app -run TestRealCLIHelpAndScan -v
 ```
+
+### Packaging and releases
+
+```sh
+nix build .#policedoc
+goreleaser check
+goreleaser release --snapshot --clean
+```
+
+The Nix build runs the tests and checks the installed binary. When dependencies
+change, update `vendorHash` in `flake.nix` to the hash reported by Nix after setting
+it to `pkgs.lib.fakeHash`.
+
+Before the first release, add the repository secret `HOMEBREW_TAP_GITHUB_TOKEN`.
+Use a token with **Contents: read and write** access to
+https://github.com/sorafujitani/homebrew-tap. The default `GITHUB_TOKEN` cannot
+update a separate repository.
+
+Push a semantic version tag such as `v0.1.0` to publish release archives and
+checksums. Stable releases also update `Formula/policedoc.rb` in the tap.
+Prereleases do not update the formula. Snapshot builds do not publish anything.
 
 See the [checking specification](docs/init.md). Licensed under [MIT](LICENSE).
