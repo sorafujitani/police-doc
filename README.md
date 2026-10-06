@@ -6,6 +6,39 @@ No configuration or manually maintained specification is needed.
 `scan` never executes document examples. It does start executables for version and help requests.
 Use only trusted documents and binaries.
 
+## How it works
+
+```sh
+policedoc scan README.md docs/
+```
+
+1. Find CLI examples in `sh`, `bash`, and `console` code blocks.
+2. Read version and help output from the installed CLIs, reusing cached help when possible.
+3. Compare example flags, values, and subcommands with the collected help.
+4. Report errors, review warnings, and unchecked parts, grouped by source command.
+
+For example, [this Markdown file](examples/cases/git.md) contains both
+`git grep -e policedoc` and `git grep -e`, which is missing its search pattern:
+
+```console
+$ policedoc scan examples/cases/git.md
+examples/cases/git.md:18:1
+  git grep -e
+  ERROR missing-flag-value: -e requires a value.
+
+1 files, 2 examples: 1 errors, 0 warnings
+Coverage: 2 partially checked, 0 uncheckable. Use --verbose for details.
+```
+
+The scan exits with code `1` because Git's help says `-e` requires a value.
+Neither search is executed.
+A flag absent from help is instead a warning to review, not proof that it is invalid.
+Coverage shows which examples were only partly checked or could not be checked.
+By default, errors cause a nonzero exit code.
+
+See [what gets checked](#what-gets-checked) for details and
+[examples](examples/README.md) for sample reports.
+
 ## Install
 
 ### Go
