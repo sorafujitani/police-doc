@@ -8,6 +8,9 @@ It does not execute document commands and only checks what the collected help su
 
 Input is a Markdown file or directory.
 Shell fences labeled `sh`, `bash`, and `console` are supported.
+A first nonempty, non-comment line starting with `$ ` marks a terminal transcript in any of these fences.
+Only prompted commands and their continuation lines are extracted; terminal output is ignored.
+Known POSIX and Bash builtins receive an uncheckable INFO notice without external help collection.
 Continuation lines, pipes, `&&`, and `||` are parsed while preserving source locations.
 
 The scanner locates executables used by the examples and collects their versions and help.

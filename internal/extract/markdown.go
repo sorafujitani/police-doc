@@ -73,29 +73,9 @@ func Markdown(path string, source []byte) []Example {
 				promptStyleKnown = true
 			}
 		}
-		var code strings.Builder
-		discardedOutput := false
-		for i, line := range lines {
-			trimmed := strings.TrimLeft(line, " \t")
-			indent := len(line) - len(trimmed)
-			switch {
-			case hasPrompt && strings.HasPrefix(trimmed, "$ "):
-				origins[i].removed = indent + 2
-				line = trimmed[2:]
-			case strings.HasPrefix(trimmed, "> ") && hasPrompt:
-				origins[i].removed = indent + 2
-				line = trimmed[2:]
-			case language == "console" && hasPrompt:
-				discardedOutput = discardedOutput || strings.TrimSpace(line) != ""
-				line = "\n" // Preserve line numbers while dropping terminal output.
-			}
-			origins[i].bodyOffset = code.Len()
-			code.WriteString(line)
-			if !strings.HasSuffix(line, "\n") {
-				code.WriteByte('\n')
-			}
-		}
-		body := code.String()
+		body, ambiguous := shellBody(lines, origins, hasPrompt)
+		parser := syntax.NewParser(syntax.Variant(syntax.LangBash))
+		file, err := parser.Parse(strings.NewReader(body), path)
 		locate := func(pos syntax.Pos) Location {
 			if len(origins) == 0 {
 				return Location{File: path, Line: 1, Column: 1}
@@ -114,37 +94,21 @@ func Markdown(path string, source []byte) []Example {
 			columnOffset = offset
 			return Location{File: path, Line: line + 1, Column: column}
 		}
-		parser := syntax.NewParser(syntax.Variant(syntax.LangBash))
-		file, err := parser.Parse(strings.NewReader(body), path)
 		if err != nil {
 			location := Location{File: path, Line: 1, Column: 1}
 			if parseError, ok := errors.AsType[syntax.ParseError](err); ok {
 				location = locate(parseError.Pos)
 			}
 			code, reason := "invalid-shell", err.Error()
-			if discardedOutput {
-				code, reason = "unsupported-shell", "Console output cannot be distinguished from multiline shell data: "+reason
+			if ambiguous {
+				code, reason = "unsupported-shell", "Terminal output cannot be distinguished from multiline shell data: "+reason
 			}
 			examples = append(examples, Example{Location: location, Text: strings.TrimSpace(body), Code: code, Reason: reason})
 			return ast.WalkSkipChildren, nil
 		}
-		if hasPrompt {
-			// Without a terminal transcript grammar, prompt-like literal data is
-			// ambiguous. Reject the block instead of turning that data into commands.
-			ambiguous := false
-			syntax.Walk(file, func(node syntax.Node) bool {
-				switch node := node.(type) {
-				case *syntax.Redirect:
-					ambiguous = ambiguous || node.Op == syntax.Hdoc || node.Op == syntax.DashHdoc
-				case *syntax.Word:
-					ambiguous = ambiguous || strings.Contains(nodeText(body, node), "\n")
-				}
-				return !ambiguous
-			})
-			if ambiguous {
-				examples = append(examples, Example{Location: locate(file.Pos()), Text: strings.TrimSpace(body), Code: "unsupported-shell", Reason: "Prompted multiline words and here-documents are ambiguous; no commands were extracted."})
-				return ast.WalkSkipChildren, nil
-			}
+		if ambiguous {
+			examples = append(examples, Example{Location: locate(file.Pos()), Text: strings.TrimSpace(body), Code: "unsupported-shell", Reason: "Prompted multiline input is ambiguous; no commands were extracted."})
+			return ast.WalkSkipChildren, nil
 		}
 		syntax.Walk(file, func(node syntax.Node) bool {
 			switch node.(type) {

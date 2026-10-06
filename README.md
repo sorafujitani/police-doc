@@ -80,7 +80,9 @@ Use `policedoc --help` for usage or `policedoc version` for the scanner version.
 
 Markdown fences labeled `sh`, `bash`, or `console` are supported.
 The scanner handles continuation lines, pipes, `&&`, and `||`.
-It ignores terminal output in prompt-based console blocks.
+In any supported fence, a first nonempty, non-comment line starting with `$ ` marks a terminal transcript.
+Only prompted commands and their continuation lines are checked; terminal output is ignored.
+Known POSIX and Bash builtins, such as `cd`, `echo`, and `source`, receive an INFO notice instead of external help collection.
 
 - A flag with an explicit value requirement in help produces an error when its value is missing.
 - A flag absent from collected help produces a review warning, not a claim that it is invalid.

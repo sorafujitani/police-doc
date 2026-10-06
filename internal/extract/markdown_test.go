@@ -6,14 +6,14 @@ import (
 )
 
 func TestMarkdownPositionsAndShell(t *testing.T) {
-	source := "intro `acme ignored`\n\n```bash\n$ acme publish \\\n  --output \"a b\" # comment\nacme status | other --x && acme \"$ACTION\"\nFOO=bar acme status\nONLY=assignment\n```\n\n```console\n$ acme status\nterminal output is not a command\n$ acme publish \\\n> doc.md\n```\n\n```go\nacme ignored\n```\n"
+	source := "intro `acme ignored`\n\n```bash\nacme publish \\\n  --output \"a b\" # comment\nacme status | other --x && acme \"$ACTION\"\nFOO=bar acme status\nONLY=assignment\n```\n\n```console\n$ acme status\nterminal output is not a command\n$ acme publish \\\n> doc.md\n```\n\n```go\nacme ignored\n```\n"
 	examples := Markdown("README.md", []byte(source))
 	want := []struct {
 		line, col int
 		words     []string
 		dynamic   bool
 	}{
-		{4, 3, []string{"acme", "publish", "--output", "a b"}, false},
+		{4, 1, []string{"acme", "publish", "--output", "a b"}, false},
 		{6, 1, []string{"acme", "status"}, false},
 		{6, 15, []string{"other", "--x"}, false},
 		{6, 28, []string{"acme", ""}, true},

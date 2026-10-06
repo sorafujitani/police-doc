@@ -83,7 +83,13 @@ func FuzzRedirectionSubstitutions(f *testing.F) {
 
 // Arbitrary Markdown and shell bytes must not panic or produce out-of-range locations.
 func FuzzMarkdownLocations(f *testing.F) {
-	for _, source := range []string{"", "```sh\nacme status\n```", "> ```console\n> $ acme café && acme --x\n> ```\n", "acme '\x00", "\xff\r\n", "acme <<EOF\n$ value\nEOF"} {
+	for _, source := range []string{
+		"", "```sh\nacme status\n```", "> ```console\n> $ acme café && acme --x\n> ```\n",
+		"acme '\x00", "\xff\r\n", "acme <<EOF\n$ value\nEOF",
+		"$ acme status\n✓ Done (output)\n$ acme publish \\\n> --output file",
+		"$ cat <<'EOF'\n$ EOF\nacme publish --output\nEOF",
+		"$ printf '%s' '\n$ command --flag\n> literal\n'",
+	} {
 		f.Add([]byte(source))
 	}
 	f.Fuzz(func(t *testing.T, data []byte) {

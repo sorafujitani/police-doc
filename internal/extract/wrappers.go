@@ -15,6 +15,10 @@ func (example Example) CLI() string {
 
 // unwrap only interprets known wrapper syntax; it never invokes a wrapper.
 func unwrap(example Example) Example {
+	if len(example.Words) > 0 && example.Words[0].Static && shellBuiltin(example.Words[0].Value) {
+		example.Code, example.Reason = "shell-builtin", "Shell builtins are not checked against external CLI help."
+		return example
+	}
 	for example.CLI() == "sudo" || example.CLI() == "npx" {
 		wrapper := example.CLI()
 		index := 1
@@ -76,4 +80,21 @@ func unwrap(example Example) Example {
 		example.Words = example.Words[index:]
 	}
 	return example
+}
+
+// Match bare names before unwrapping: /bin/echo and sudo echo select external
+// executables, even though an unqualified echo normally selects a shell builtin.
+func shellBuiltin(name string) bool {
+	switch name {
+	case ".", ":", "[", "alias", "bg", "bind", "break", "builtin", "caller",
+		"cd", "command", "compgen", "complete", "compopt", "continue", "declare",
+		"dirs", "disown", "echo", "enable", "eval", "exec", "exit", "export",
+		"false", "fc", "fg", "getopts", "hash", "help", "history", "jobs", "kill",
+		"let", "local", "logout", "mapfile", "popd", "printf", "pushd", "pwd",
+		"read", "readarray", "readonly", "return", "set", "shift", "shopt",
+		"source", "suspend", "test", "times", "trap", "true", "type", "typeset",
+		"ulimit", "umask", "unalias", "unset", "wait":
+		return true
+	}
+	return false
 }

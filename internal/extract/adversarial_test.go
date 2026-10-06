@@ -15,7 +15,11 @@ func TestMarkdownPreservesLiteralPromptText(t *testing.T) {
 	} {
 		t.Run(body, func(t *testing.T) {
 			examples := Markdown("doc.md", []byte("```bash\n"+body+"\n```\n"))
-			if len(examples) != 1 || examples[0].Reason != "" {
+			wantCode := ""
+			if strings.HasPrefix(body, "printf") {
+				wantCode = "shell-builtin"
+			}
+			if len(examples) != 1 || examples[0].Code != wantCode {
 				t.Fatalf("literal text became commands: %+v", examples)
 			}
 			if strings.HasPrefix(body, "printf") && examples[0].Words[2].Value != "\n$ value\n> value\n" {
@@ -26,7 +30,7 @@ func TestMarkdownPreservesLiteralPromptText(t *testing.T) {
 }
 
 func TestMarkdownRejectsAmbiguousPromptedLiterals(t *testing.T) {
-	for _, language := range []string{"bash", "console"} {
+	for _, language := range []string{"sh", "bash", "console"} {
 		for _, body := range []string{
 			"$ cat <<'EOF'\n$ EOF\nacme publish --output\nEOF",
 			"$ printf '%s' '\n$ value\n> value\n'",
@@ -40,7 +44,7 @@ func TestMarkdownRejectsAmbiguousPromptedLiterals(t *testing.T) {
 }
 
 func TestMarkdownMalformedPromptStillWarns(t *testing.T) {
-	for _, language := range []string{"bash", "console"} {
+	for _, language := range []string{"sh", "bash", "console"} {
 		examples := Markdown("doc.md", []byte("```"+language+"\n$ acme 'unterminated\n```"))
 		if len(examples) != 1 || examples[0].Code != "invalid-shell" {
 			t.Fatalf("invalid shell was hidden: %+v", examples)
