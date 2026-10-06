@@ -35,7 +35,6 @@ func helpOutput(ctx context.Context, binary string, args []string) (string, erro
 }
 
 func parseHelpPage(output, binary, tool string, path []string) (Command, error) {
-	output = helpANSI.ReplaceAllString(output, "")
 	parsed := parseHelp(output)
 	switch strings.TrimSuffix(filepath.Base(binary), ".exe") {
 	case "brew":
@@ -83,8 +82,10 @@ func parseHelpPage(output, binary, tool string, path []string) (Command, error) 
 		// canonical interpreter or an executable alias instead of argv[0].
 		expectedName = ""
 	}
-	matched, needsDetails, usageName := helpUsageInfo(output, expectedName, path)
-	parsed.UsageName = usageName
+	matched, needsDetails, usageName, subcommandFirst, flagsAfterPositionals := helpUsageInfo(output, expectedName, path)
+	parsed.UsageName, parsed.SubcommandFirst = usageName, subcommandFirst
+	parsed.FlagsAfterPositionals = flagsAfterPositionals
+	parsed.Aliases = helpAliases(output, usageName, path)
 	// Some root pages (notably npm) show example invocations instead of a
 	// root synopsis. Their explicit command catalog still identifies the root.
 	if helpUsageHeading.MatchString(output) && !matched && (len(path) > 0 || len(parsed.Commands) == 0) {

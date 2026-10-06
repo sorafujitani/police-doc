@@ -64,10 +64,10 @@ func TestHelpBasedChecks(t *testing.T) {
 		{"acme publish --unknown --output", "unverified-flag", "warning", "needs-review"},
 		{"acme publish --root", "unverified-flag", "warning", "needs-review"},
 		{"acme publish --legacy", "unverified-flag", "warning", "needs-review"},
-		{"acme publish --switch --output", "", "", ""},
+		{"acme publish --switch --output", "unknown-flag-arity", "warning", "uncheckable"},
 		{"acme publish -- --output", "", "", ""},
-		{"acme publish doc.md --output", "unchecked-arguments", "info", "uncheckable"},
-		{"acme unknown --output", "unchecked-arguments", "info", "uncheckable"},
+		{"acme publish doc.md --output", "unchecked-arguments", "warning", "uncheckable"},
+		{"acme unknown --output", "unchecked-arguments", "warning", "uncheckable"},
 		{"acme publish $DOC --output", "dynamic-argument", "info", "uncheckable"},
 		{"acme publish --output $OUT", "dynamic-argument", "info", "uncheckable"},
 		{"acme publish *.md", "dynamic-argument", "info", "uncheckable"},
@@ -141,19 +141,19 @@ func TestReportAndExitThreshold(t *testing.T) {
 				}
 				continue
 			}
-			for _, detail := range []string{"INFO ", "acme publish $DOC", "Target:", "Evidence", "acme publish -h", "[confirmed]"} {
+			for _, detail := range []string{"INFO incomplete-spec", "Target:", "Evidence", "acme publish -h", "[confirmed]"} {
 				if bytes.Contains(out.Bytes(), []byte(detail)) != verbose {
 					t.Fatalf("verbose=%v: unexpected visibility of %q: %s", verbose, detail, out.String())
 				}
 			}
-			wantLocations := 2
+			wantLocations := 3
 			if verbose {
 				wantLocations = 4
 			}
 			if bytes.Count(out.Bytes(), []byte("README.md:2:1")) != wantLocations {
 				t.Fatalf("expected one location per visible command: %s", out.String())
 			}
-			for _, finding := range []string{"ERROR missing-flag-value", "WARNING unverified-flag", "1 files, 4 examples: 1 errors, 1 warnings", "Coverage: 3 partially checked, 1 uncheckable."} {
+			for _, finding := range []string{"ERROR missing-flag-value", "WARNING unverified-flag", "INFO dynamic-argument", "acme publish $DOC", "1 files, 4 examples: 1 errors, 1 warnings", "Coverage: 3 partially checked, 1 uncheckable."} {
 				if !bytes.Contains(out.Bytes(), []byte(finding)) {
 					t.Fatalf("text lost %q: %s", finding, out.String())
 				}

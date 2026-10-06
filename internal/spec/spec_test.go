@@ -27,7 +27,7 @@ func TestSnapshotValidation(t *testing.T) {
 		{"tool", func(s *Snapshot) { s.Tool = "../acme" }},
 		{"root-name", func(s *Snapshot) { s.Root.Name = "acme" }},
 		{"help-name", func(s *Snapshot) { s.Root.UsageName = "../acme" }},
-		{"arity", func(s *Snapshot) { s.Root.Flags[0].Value = "none" }},
+		{"arity", func(s *Snapshot) { s.Root.Flags[0].Value = "invalid" }},
 		{"bad-flag", func(s *Snapshot) { s.Root.Flags[0].Name = "--" }},
 		{"duplicate-flag", func(s *Snapshot) { s.Root.Flags = append(s.Root.Flags, s.Root.Flags[0]) }},
 		{"bad-command", func(s *Snapshot) { s.Root.Commands[0].Name = "--run" }},
@@ -75,8 +75,8 @@ esac
 		t.Fatalf("unexpected snapshot: %+v", snapshot)
 	}
 	build := snapshot.Root.Child("build")
-	if len(build.Flags) != 3 || build.Flags[0].Value != "required" || build.Flags[1].Value != "unknown" {
-		t.Fatalf("help was treated as complete: %+v", build)
+	if len(build.Flags) != 3 || build.Flags[0].Value != "required" || build.Flags[1].Value != "none" {
+		t.Fatalf("documented value rules were not preserved: %+v", build)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

@@ -2,6 +2,7 @@ package spec
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -23,16 +24,24 @@ type Evidence struct {
 
 type Command struct {
 	// UsageName is the program name printed in help, which may differ from argv[0].
-	UsageName string     `json:"usage_name,omitempty"`
-	Name      string     `json:"name,omitempty"`
-	Commands  []Command  `json:"commands,omitempty"`
-	Flags     []Flag     `json:"flags,omitempty"`
-	Sources   []Evidence `json:"sources,omitempty"`
+	UsageName string `json:"usage_name,omitempty"`
+	// SubcommandFirst means every matching usage starts with a command placeholder
+	// (possibly after options), rather than an ordinary positional argument.
+	SubcommandFirst       bool       `json:"subcommand_first,omitempty"`
+	FlagsAfterPositionals bool       `json:"flags_after_positionals,omitempty"`
+	ShortFlagClusters     bool       `json:"short_flag_clusters,omitempty"`
+	AliasesComplete       bool       `json:"aliases_complete,omitempty"`
+	Name                  string     `json:"name,omitempty"`
+	Aliases               []string   `json:"aliases,omitempty"`
+	Commands              []Command  `json:"commands,omitempty"`
+	Flags                 []Flag     `json:"flags,omitempty"`
+	Sources               []Evidence `json:"sources,omitempty"`
 }
 
 type Flag struct {
-	Name  string `json:"name"`
-	Value string `json:"value"` // required, optional, or unknown.
+	Name    string   `json:"name"`
+	Value   string   `json:"value"` // none, required, optional-attached, optional, or unknown.
+	Choices []string `json:"choices,omitempty"`
 }
 
 func (s *Snapshot) Validate() error {
@@ -52,16 +61,30 @@ func validateCommand(c *Command, path string) error {
 	if c.UsageName != "" && !validName(c.UsageName) {
 		return fmt.Errorf("%s: invalid help program name", path)
 	}
+	aliases := make(map[string]bool)
+	for _, alias := range c.Aliases {
+		if !validName(alias) || aliases[alias] {
+			return fmt.Errorf("%s: invalid or repeated alias %q", path, alias)
+		}
+		aliases[alias] = true
+	}
 	if err := validateEvidence(c.Sources); err != nil {
 		return fmt.Errorf("%s: %w", path, err)
 	}
 	flags := make(map[string]bool)
 	for _, flag := range c.Flags {
-		if flag.Value != "required" && flag.Value != "optional" && flag.Value != "unknown" {
+		if flag.Value != "none" && flag.Value != "required" && flag.Value != "optional-attached" && flag.Value != "optional" && flag.Value != "unknown" {
 			return fmt.Errorf("%s: %s has invalid value mode %q", path, flag.Name, flag.Value)
 		}
 		if !validFlag(flag.Name) || flags[flag.Name] {
 			return fmt.Errorf("%s: invalid or conflicting flag %q", path, flag.Name)
+		}
+		choices := make(map[string]bool)
+		for _, choice := range flag.Choices {
+			if strings.TrimSpace(choice) == "" || strings.ContainsAny(choice, "\r\n\x00\x1b") || choices[choice] {
+				return fmt.Errorf("%s: invalid or repeated choice for %s", path, flag.Name)
+			}
+			choices[choice] = true
 		}
 		flags[flag.Name] = true
 	}
@@ -106,7 +129,19 @@ func (c *Command) Child(name string) *Command {
 			return &c.Commands[i]
 		}
 	}
-	return nil
+	if !c.AliasesComplete {
+		return nil // Do not choose an alias before sibling conflicts can be checked.
+	}
+	var alias *Command
+	for i := range c.Commands {
+		if slices.Contains(c.Commands[i].Aliases, name) {
+			if alias != nil {
+				return nil // Conflicting aliases are not a usable command mapping.
+			}
+			alias = &c.Commands[i]
+		}
+	}
+	return alias
 }
 
 func (c *Command) Flag(name string) *Flag {

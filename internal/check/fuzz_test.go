@@ -2,6 +2,7 @@ package check
 
 import (
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -53,10 +54,15 @@ func FuzzOpaqueTails(f *testing.F) {
 				{Value: "acme", Static: true}, {Value: "publish", Static: true}, head,
 			}}
 			want := Example(example, snapshot)
+			want.Diagnostics = slices.DeleteFunc(want.Diagnostics, func(d Diagnostic) bool { return d.Status == "uncheckable" })
 			for _, arg := range strings.Split(tail, "\x00") {
 				example.Words = append(example.Words, extract.Word{Value: arg, Static: true})
 			}
-			if got := Example(example, snapshot); !reflect.DeepEqual(got, want) {
+			got := Example(example, snapshot)
+			// A stopped check may become visible, but opaque words cannot produce
+			// new claims that a flag/argument is valid or invalid.
+			got.Diagnostics = slices.DeleteFunc(got.Diagnostics, func(d Diagnostic) bool { return d.Status == "uncheckable" })
+			if !reflect.DeepEqual(got, want) {
 				t.Fatalf("opaque tail %q after %q changed verdict:\ngot: %+v\nwant: %+v", tail, head.Value, got, want)
 			}
 		}

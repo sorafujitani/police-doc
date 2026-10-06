@@ -2,6 +2,7 @@ package check
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/sorafujitani/police-doc/internal/extract"
@@ -35,6 +36,7 @@ func Example(example extract.Example, snapshot *spec.Snapshot) Result {
 	result.CLI, result.Version, result.OS = snapshot.Tool, snapshot.Version, snapshot.OS
 	result.Coverage = "partial"
 	command := &snapshot.Root
+	positionals := false
 	var path []string
 	evidence := command.Sources
 	if len(evidence) == 0 {
@@ -48,50 +50,82 @@ scan:
 		}
 		token := example.Words[i]
 		if !token.Static {
-			add("info", "uncheckable", "dynamic-argument", "Only the static prefix was checked; expansions and substitutions were not executed.", sources())
+			add("info", "uncheckable", "dynamic-argument", "The dynamic argument and remaining tail were not checked; expansions and substitutions were not executed.", sources())
 			break
 		}
 		word := token.Value
 		if word == "--" {
+			if i+1 < len(example.Words) {
+				add("info", "uncheckable", "forwarded-arguments", "Arguments after -- were not checked.", sources())
+			}
 			break // The remaining tail may be forwarded to another program.
 		}
 		if strings.HasPrefix(word, "-") && word != "-" {
-			name, _, attached := strings.Cut(word, "=")
-			flag := command.Flag(name)
-			if flag == nil {
-				add("warning", "needs-review", "unverified-flag", fmt.Sprintf("%s is absent from the collected help; this does not prove it is invalid or removed.", name), sources())
-				break
-			}
-			switch flag.Value {
-			case "required":
-				if !attached {
-					if i+1 == len(example.Words) {
-						add("error", "confirmed", "missing-flag-value", name+" requires a value.", sources())
-					} else if !example.Words[i+1].Static {
-						add("info", "uncheckable", "dynamic-argument", "The flag value and following arguments are dynamic; they were not expanded or checked.", sources())
-						break scan
-					} else {
+			for _, argument := range flagWords(command, word) {
+				name, value, attached := strings.Cut(argument, "=")
+				flag := command.Flag(name)
+				if flag == nil {
+					add("warning", "needs-review", "unverified-flag", fmt.Sprintf("%s is absent from the collected help; this does not prove it is invalid or removed.", name), sources())
+					break scan
+				}
+				switch flag.Value {
+				case "required":
+					if !attached {
+						if i+1 == len(example.Words) {
+							add("error", "confirmed", "missing-flag-value", name+" requires a value.", sources())
+							break scan
+						} else if !example.Words[i+1].Static {
+							add("info", "uncheckable", "dynamic-argument", "The flag value and following arguments are dynamic; they were not expanded or checked.", sources())
+							break scan
+						}
 						i++ // Even a dash-prefixed token can be a flag's value.
+						value, attached = example.Words[i].Value, true
+					}
+				case "optional", "unknown":
+					if !attached {
+						if i+1 < len(example.Words) {
+							add("warning", "uncheckable", "unknown-flag-arity", name+" has an ambiguous value rule; the following arguments were not checked.", sources())
+						}
+						break scan
 					}
 				}
-			case "optional", "unknown":
-				if !attached {
-					break scan // The next token may be a value, not a subcommand or flag.
+				if attached && len(flag.Choices) > 0 && !slices.Contains(flag.Choices, value) {
+					add("warning", "needs-review", "unverified-flag-value", fmt.Sprintf("%q is not among the documented choices for %s: %s.", value, name, strings.Join(flag.Choices, ", ")), sources())
 				}
 			}
 			continue
 		}
-		if child := command.Child(word); child != nil {
-			path = append(path, word)
+		if child := command.Child(word); !positionals && child != nil {
+			path = append(path, child.Name)
 			command = child
 			if len(child.Sources) > 0 {
 				evidence = child.Sources
 			}
 			continue
 		}
-		// Help does not establish positional bounds or forwarding semantics.
-		// Stop rather than checking a script's arguments against its launcher.
-		add("info", "uncheckable", "unchecked-arguments", "Positional arguments and the remaining tail were not checked.", sources())
+		if !positionals && command.SubcommandFirst && len(command.Commands) > 0 {
+			result.Alias = &AliasRequest{Path: slices.Clone(path), Name: word}
+			parent := strings.Join(append([]string{example.CLI()}, path...), " ")
+			add("warning", "needs-review", "unverified-command", fmt.Sprintf("%q could not be resolved as a listed subcommand or a unique documented alias of %q; this does not prove it is invalid or removed.", word, parent), sources())
+			break
+		}
+		if command.FlagsAfterPositionals {
+			if !positionals {
+				add("info", "uncheckable", "unchecked-positionals", "Positional values and bounds were not checked; documented trailing flags are still checked.", sources())
+			}
+			positionals = true
+			continue
+		}
+		// Do not apply a launcher's flags to a forwarded script/command. Make
+		// skipped flag-like words visible rather than silently reporting success.
+		severity := "info"
+		for _, remaining := range example.Words[i+1:] {
+			if !remaining.Static || strings.HasPrefix(remaining.Value, "-") {
+				severity = "warning"
+				break
+			}
+		}
+		add(severity, "uncheckable", "unchecked-arguments", "Positional arguments and the remaining tail were not checked; help does not establish their flag or forwarding rules.", sources())
 		break
 	}
 	code, message := "incomplete-spec", "Help is incomplete; hidden entries, argument bounds and lifecycle changes are not checked."

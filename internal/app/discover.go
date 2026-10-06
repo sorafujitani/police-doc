@@ -34,8 +34,19 @@ func collectAndCheck(ctx context.Context, example extract.Example, cache map[str
 	}
 	collected := discoverHelp(ctx, example, cache, options)
 	result := check.Example(example, collected.Snapshot)
-	for collected.err == nil && len(result.HelpPath) > 0 {
-		if err := collected.collector.Collect(ctx, result.HelpPath); err != nil {
+	resolved := make(map[string]bool)
+	for collected.err == nil && (len(result.HelpPath) > 0 || result.Alias != nil) {
+		if result.Alias != nil {
+			request := result.Alias
+			key := strings.Join(request.Path, " ") + "\x00" + request.Name
+			if resolved[key] {
+				break
+			}
+			resolved[key] = true
+			if err := collected.collector.CollectAliases(ctx, request.Path); err != nil {
+				return check.Result{}, err
+			}
+		} else if err := collected.collector.Collect(ctx, result.HelpPath); err != nil {
 			result.Diagnostics = append(result.Diagnostics, check.Diagnostic{
 				Severity: "warning", Status: "uncheckable", Code: "help-incomplete",
 				Message: fmt.Sprintf("Could not collect help for %q.", strings.Join(append([]string{example.CLI()}, result.HelpPath...), " ")),

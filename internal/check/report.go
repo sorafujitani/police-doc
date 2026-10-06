@@ -23,9 +23,15 @@ type Diagnostic struct {
 	Evidence []spec.Evidence `json:"evidence"`
 }
 
+type AliasRequest struct {
+	Path []string
+	Name string
+}
+
 type Result struct {
 	// HelpPath requests missing help for an advertised command, not document argv.
 	HelpPath    []string         `json:"-"`
+	Alias       *AliasRequest    `json:"-"`
 	Location    extract.Location `json:"location"`
 	Command     string           `json:"command"`
 	CLI         string           `json:"cli,omitempty"`
@@ -94,7 +100,12 @@ func (report *Report) Write(writer io.Writer, format string, verbose bool) error
 		shown := false
 		for _, diagnostic := range result.Diagnostics {
 			if diagnostic.Severity == "info" && !verbose {
-				continue
+				switch diagnostic.Code {
+				case "dynamic-argument", "unchecked-arguments", "unchecked-positionals", "forwarded-arguments":
+					// Concrete gaps remain visible without verbose evidence output.
+				default:
+					continue
+				}
 			}
 			if !shown {
 				fmt.Fprintf(&text, "%s:%d:%d\n  %s\n", terminalText(result.Location.File), result.Location.Line, result.Location.Column, terminalText(result.Command))

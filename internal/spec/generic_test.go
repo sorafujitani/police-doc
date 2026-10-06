@@ -26,12 +26,12 @@ These are common Git commands used in various situations:
 start a working area (see also: git help tutorial)
    clone      Clone a repository
    init       Create an empty repository
-`, []string{"clone", "init"}, map[string]string{"-v": "unknown", "--version": "unknown", "-C": "required", "--exec-path": "optional"}},
+`, []string{"clone", "init"}, map[string]string{"-v": "none", "--version": "none", "-C": "required", "--exec-path": "optional-attached"}},
 		{"git-flags", `usage: git commit [options]
     -m, --[no-]message <message>  commit message
     -S, --[no-]gpg-sign[=<key-id>]
     --trailer <trailer-value>  add a trailer (see --not-a-flag)
-`, nil, map[string]string{"-m": "required", "--message": "required", "--no-message": "unknown", "-S": "optional", "--gpg-sign": "optional", "--no-gpg-sign": "unknown", "--trailer": "required"}},
+`, nil, map[string]string{"-m": "required", "--message": "required", "--no-message": "unknown", "-S": "optional-attached", "--gpg-sign": "optional-attached", "--no-gpg-sign": "unknown", "--trailer": "required"}},
 		{"npm-root", `npm <command>
 
 All commands:
@@ -40,7 +40,7 @@ All commands:
 
 Options:
     --help  Print help
-`, []string{"install", "run", "test", "version"}, map[string]string{"--help": "unknown"}},
+`, []string{"install", "run", "test", "version"}, map[string]string{"--help": "none"}},
 		{"npm-flags", `Usage:
 npm install [<package-spec> ...]
 
@@ -50,7 +50,7 @@ Options:
 [-w|--workspace <workspace-name> [-w|--workspace <workspace-name> ...]]
   --omit
     Dependency types to omit.
-`, nil, map[string]string{"-E": "unknown", "--save-exact": "unknown", "-g": "unknown", "--global": "unknown", "--omit": "required", "-w": "required", "--workspace": "required"}},
+`, nil, map[string]string{"-E": "none", "--save-exact": "none", "-g": "none", "--global": "none", "--omit": "required", "-w": "required", "--workspace": "required"}},
 		{"brew-subcommands", `Usage: brew services [subcommand]
 
 Subcommands:
@@ -61,7 +61,7 @@ Subcommands:
 
 Options:
   --json  JSON output
-`, []string{"list", "start"}, map[string]string{"--json": "unknown"}},
+`, []string{"list", "start"}, map[string]string{"--json": "none"}},
 		{"docker", `Usage: docker [OPTIONS] COMMAND
 
 Common Commands:
@@ -76,9 +76,9 @@ Global Options:
       --config string      Config directory
   -H, --host list          Daemon sockets
       --debug              Enable debugging (see --not-a-flag)
-`, []string{"run", "container", "compose"}, map[string]string{"--config": "required", "-H": "required", "--host": "required", "--debug": "unknown"}},
-		{"other-formats", "Usage: acme [OPTIONS]\n\nOptions:\n\t-o, --output FILE\tOutput file\n  --color[=WHEN]  Color mode\n  --dry_run  Dry run\n  \x1b[32m--define\x1b[0m=<key=value>  Define value\n  --mode <--fast|--slow>  Modes, not flags\n", nil, map[string]string{"-o": "required", "--output": "required", "--color": "optional", "--dry_run": "unknown", "--define": "required", "--mode": "required"}},
-		{"uv-repeated-flags", "Options:\n  -q, --quiet...\n  -v, --verbose...\n", nil, map[string]string{"-q": "unknown", "--quiet": "unknown", "-v": "unknown", "--verbose": "unknown"}},
+`, []string{"run", "container", "compose"}, map[string]string{"--config": "required", "-H": "required", "--host": "required", "--debug": "none"}},
+		{"other-formats", "Usage: acme [OPTIONS]\n\nOptions:\n\t-o, --output FILE\tOutput file\n  --color[=WHEN]  Color mode\n  --dry_run  Dry run\n  \x1b[32m--define\x1b[0m=<key=value>  Define value\n  --mode <--fast|--slow>  Modes, not flags\n", nil, map[string]string{"-o": "required", "--output": "required", "--color": "optional-attached", "--dry_run": "none", "--define": "required", "--mode": "required"}},
+		{"uv-repeated-flags", "Options:\n  -q, --quiet...\n  -v, --verbose...\n", nil, map[string]string{"-q": "none", "--quiet": "none", "-v": "none", "--verbose": "none"}},
 		{"ripgrep-alias-values", "Options:\n    -e PATTERN, --regexp=PATTERN\n    -g GLOB, --glob=GLOB\n", nil, map[string]string{"-e": "required", "--regexp": "required", "-g": "required", "--glob": "required"}},
 		{"conflicting-arity", "Options:\n  --output FILE\n  --output[=FILE]\n  --output FILE\n", nil, map[string]string{"--output": "unknown"}},
 		{"examples-not-commands", `Usage: searcher [OPTIONS] PATTERN
@@ -93,7 +93,11 @@ Options:
 `, nil, map[string]string{"--pre": "required"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			command := parseHelp(tc.help)
+			plain, err := normalizeTerminalOutput(tc.help)
+			if err != nil {
+				t.Fatal(err)
+			}
+			command := parseHelp(plain)
 			flags := make(map[string]string)
 			for _, flag := range command.Flags {
 				flags[flag.Name] = flag.Value

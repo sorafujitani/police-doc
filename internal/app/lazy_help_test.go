@@ -22,7 +22,7 @@ printf '%s\n' "$*" >> "$POLICEDOC_TEST_CALLS"
 case "$*" in
   --version) echo 1.0.0 ;;
   -h)
-    printf 'Usage: acme COMMAND\nOptions:\n  --config FILE  Configuration\n  --toggle  Unknown arity\nCommands:\n'
+    printf 'Usage: acme COMMAND\nOptions:\n  --config FILE  Configuration\n  --toggle [VALUE]  Ambiguous value rule\nCommands:\n'
     i=0
     while [ "$i" -lt 150 ]; do
       printf '  unused%s  Unrelated command\n' "$i"
@@ -66,13 +66,16 @@ func TestHelpFollowsOnlyCheckableDocumentPaths(t *testing.T) {
 		"acme export --output result.txt",
 		"acme --config file export --output",
 		"acme --toggle unused0",
-		"acme input-file unused1",
+		"acme export input-file unused1",
 		"acme -- unused2",
 		"acme \"$DYNAMIC\" unused3",
 	}, "\n")+"\n```\n")
 	report := scanReport(t, doc)
-	if report.Summary.Errors != 1 || report.Summary.Warnings != 0 || report.Summary.Uncheckable != 0 {
-		t.Fatalf("unrelated help affected results: %+v", report)
+	if report.Summary.Errors != 1 || report.Summary.Warnings != 1 || report.Summary.Uncheckable != 0 {
+		t.Fatalf("unexpected findings: %+v", report)
+	}
+	if report.Results[2].Diagnostics[0].Code != "unknown-flag-arity" {
+		t.Fatalf("ambiguous value rule was not reported: %+v", report.Results[2])
 	}
 	assertHelpCalls(t, log, "--version\n-h\nexport -h\n")
 

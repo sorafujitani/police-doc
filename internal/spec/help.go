@@ -50,7 +50,10 @@ func commandOutput(ctx context.Context, binary string, env []string, help bool, 
 	if ctx.Err() != nil {
 		return "", fmt.Errorf("collecting %s: %w", binary, ctx.Err())
 	}
-	text := output.buffer.String()
+	text, normalizeErr := normalizeTerminalOutput(output.buffer.String())
+	if normalizeErr != nil {
+		return "", fmt.Errorf("collecting %s %s: %w", binary, strings.Join(args, " "), normalizeErr)
+	}
 	if help && helpError.MatchString(text) {
 		return "", fmt.Errorf("collecting %s %s: CLI reported an error: %s", binary, strings.Join(args, " "), strings.TrimSpace(text))
 	}

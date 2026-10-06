@@ -86,16 +86,21 @@ Known POSIX and Bash builtins, such as `cd`, `echo`, and `source`, receive an IN
 
 - A flag with an explicit value requirement in help produces an error when its value is missing.
 - A flag absent from collected help produces a review warning, not a claim that it is invalid.
-- Known subcommand names select their collected help.
-- Unknown value rules, positional arguments, `--`, and dynamic words stop further argument checking.
+- Flags documented without a value do not stop checking later flags. Short flag groups and attached values are checked for getopt-style short/long aliases when each component's value rule is known. Single-dash long-flag formats are not split.
+- For `--flag[=VALUE]`, a separate following word is not consumed as its value, so checking continues.
+- Values outside an explicit choice list in help produce review warnings. Reordering the same choices does not change the constraint; examples and defaults do not establish permitted choices.
+- Known subcommand names and documented aliases select their collected help.
+- An unlisted subcommand produces a review warning when usage identifies a command position and help lists available commands. It is not proof that the name is invalid.
+- Flags after positional arguments are checked when usage explicitly documents that order. Positional values and bounds remain unchecked.
+- Ambiguous value rules or positional tails containing unchecked flags produce warnings. Dynamic words and arguments after `--` are not expanded or checked.
 
 All help-based checks are partial. Help cannot establish complete grammar or hidden entries.
 Required flags, positional bounds, deprecation, removal, and replacements are not inferred.
-Short flag groups, aliases, inheritance, and argument forwarding are not guessed.
+Undocumented aliases, inherited flags absent from help, and argument forwarding are not guessed.
 No examples, substitutions, or variable expansions are executed; documents are never rewritten.
 
-Text reports show errors and warnings, grouped by source command, followed by counts and coverage.
-Use `--verbose` for INFO messages, target CLI/version/OS, evidence, and diagnostic certainty.
+Text reports show errors, warnings, and concrete gaps such as skipped arguments, grouped by source command, followed by counts and coverage.
+Use `--verbose` for all INFO messages, target CLI/version/OS, evidence, and diagnostic certainty.
 INFO describes incomplete checking, not a successful validation.
 Coverage distinguishes partial checks from uncheckable examples; no result claims full validation.
 JSON always includes all diagnostics and collection details, regardless of `--verbose`, using schema version `2`.
@@ -119,11 +124,15 @@ examples in different directories. Different local executables remain separate.
 Failed requests are retried on the next scan; they are not stored as permanent failures.
 Every run still checks all input examples. Use `--refresh` after plugin or environment changes.
 
-Collection starts with root help, then follows only advertised subcommands reached
-while checking the examples. Flag values, positional arguments, dynamic words and
-forwarded arguments are not used as help requests. Unused commands are not visited.
+Collection starts with root help, then follows advertised subcommands reached
+while checking the examples. An unlisted command name triggers a bounded search
+of advertised sibling help for aliases. Alias resolution requires the sibling search
+to finish without conflicts; incomplete searches leave a review warning.
+The unlisted name itself, flag values,
+positional arguments, dynamic words, and forwarded arguments are never used as help requests.
 Most CLIs use `-h`, then `--help` as a fallback.
 Limits are three levels and 100 help calls per executable per scan, including failed calls.
+Alias discovery has a separate 100-call budget so it cannot exhaust normal collection.
 Each call allows ten seconds and 1 MiB of combined output, with no interactive input.
 For Homebrew, `brew commands --quiet` lists commands and `brew help <command>`
 collects their help within the same limits.

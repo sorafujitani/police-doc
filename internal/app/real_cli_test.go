@@ -23,6 +23,7 @@ func TestRealCLIHelpAndScan(t *testing.T) {
 	for _, tc := range []struct{ tool, good, missingValue string }{
 		{"go", "go build -o example", "go build -o"},
 		{"git", "git commit --file=message.txt", "git commit --file"},
+		{"gh", "gh auth login --hostname github.com", "gh auth login --hostname"},
 		{"node", `node --eval "console.log(1)"`, "node --eval"},
 		{"python3", `python3 -c "print(1)"`, ""},
 		{"uv", "uv --quiet --version", "uv pip install --python"},
