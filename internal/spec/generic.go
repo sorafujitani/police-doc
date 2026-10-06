@@ -29,10 +29,12 @@ var (
 	helpCommandName    = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:+-]*$`)
 	helpVersion        = regexp.MustCompile(`\bv?[0-9]+\.[0-9]+(?:\.[0-9A-Za-z]+)*(?:[-+][0-9A-Za-z.+-]+)?\b`)
 	helpUsage          = regexp.MustCompile(`(?im)^\s*usage\s*:`)
+	helpUsageHeading   = regexp.MustCompile(`(?im)^\s*(?:usage|example usage|further help)\s*:`)
 	helpError          = regexp.MustCompile(`(?im)^\s*(?:(?:[^\r\n:]+: )?error:|fatal:|unknown command\b|unrecognized (?:command|argument)\b)`)
 	helpANSI           = regexp.MustCompile("\x1b\\[[0-?]*[ -/]*[@-~]")
 	helpColumns        = regexp.MustCompile(`\s{2,}`)
 	helpCommandRow     = regexp.MustCompile(`^\s+([A-Za-z0-9][A-Za-z0-9_.:+-]*)\*?\s{2,}\S`)
+	helpCommandLabel   = regexp.MustCompile(`^\s+([A-Za-z0-9][A-Za-z0-9_.:+-]*):$`)
 	helpCommandHeading = regexp.MustCompile(`(?i)^(?:(?:available|common|management|all|other|additional|the)\s+)*(?:sub)?commands?(?:\s+are)?:$|^these are .+\bcommands\b.*:$`)
 	helpFlagName       = regexp.MustCompile(`--(?:\[no-\])?[A-Za-z0-9][A-Za-z0-9_.:-]*|-[A-Za-z0-9][A-Za-z0-9_.:-]*`)
 	helpAliasGap       = regexp.MustCompile(`^\s*[,|/]\s*$`)
@@ -73,127 +75,119 @@ func isGo(binary string) bool {
 	return strings.TrimSuffix(filepath.Base(binary), ".exe") == "go"
 }
 
-// CollectHelp follows advertised commands within bounded safety limits.
-// A failed child stays a placeholder; failed root help aborts collection.
-func CollectHelp(ctx context.Context, options HelpOptions) (*Snapshot, []string, error) {
+// HelpCollector fills only requested, advertised paths. Its budget and failed
+// attempts last for one scan; only successful help is stored in the snapshot.
+type HelpCollector struct {
+	Snapshot *Snapshot
+	Revision int // Successful collections since loading the snapshot.
+	options  HelpOptions
+	depth    int
+	calls    int
+	attempts map[string]error
+}
+
+func NewHelpCollector(ctx context.Context, options HelpOptions, snapshot *Snapshot) (*HelpCollector, error) {
 	if options.Binary == "" {
-		return nil, nil, fmt.Errorf("help collection requires an executable")
+		return nil, fmt.Errorf("help collection requires an executable")
 	}
 	if options.Tool == "" {
 		options.Tool = strings.TrimSuffix(filepath.Base(options.Binary), ".exe")
 	}
 	if !helpCommandName.MatchString(options.Tool) {
-		return nil, nil, fmt.Errorf("invalid tool name")
+		return nil, fmt.Errorf("invalid tool name")
 	}
-	maxDepth := DefaultHelpDepth
+	depth := DefaultHelpDepth
 	if options.MaxDepth != nil {
-		maxDepth = *options.MaxDepth
+		depth = *options.MaxDepth
 	}
 	if options.MaxCommands == 0 {
 		options.MaxCommands = DefaultHelpCommands
 	}
-	if maxDepth < 0 || options.MaxCommands < 1 {
-		return nil, nil, fmt.Errorf("help depth must be nonnegative and call limit must be positive")
+	if depth < 0 || options.MaxCommands < 1 {
+		return nil, fmt.Errorf("help depth must be nonnegative and call limit must be positive")
 	}
-	type request struct {
-		path  []string
-		depth int
-	}
-	requests := []request{{}}
-	seen := map[string]bool{"": true}
-	snapshot := &Snapshot{Tool: options.Tool, Version: options.Version, OS: runtime.GOOS}
-	if options.Version == "" {
-		version, evidence, err := DetectVersion(ctx, options.Binary)
-		if err != nil {
-			return nil, nil, err
+	if snapshot == nil {
+		snapshot = &Snapshot{Tool: options.Tool, Version: options.Version, OS: runtime.GOOS}
+		if options.Version == "" {
+			version, evidence, err := DetectVersion(ctx, options.Binary)
+			if err != nil {
+				return nil, err
+			}
+			snapshot.Version = version
+			snapshot.Sources = []Evidence{evidence}
 		}
-		snapshot.Version = version
-		snapshot.Sources = append(snapshot.Sources, evidence)
 	}
 	if err := snapshot.Validate(); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	if isGo(options.Binary) {
-		if err := collectGo(ctx, options.Binary, snapshot); err != nil {
-			return nil, nil, err
-		}
-		return snapshot, nil, nil
+	if snapshot.Tool != options.Tool || snapshot.OS != runtime.GOOS || (options.Version != "" && snapshot.Version != options.Version) {
+		return nil, fmt.Errorf("help snapshot does not match the requested executable")
 	}
-	var warnings []string
-	commandLimit := false
-	calls := 0
-	for index := 0; index < len(requests); index++ {
-		current := requests[index]
-		if calls >= options.MaxCommands {
-			commandLimit = true
-			break
+	collector := &HelpCollector{Snapshot: snapshot, options: options, depth: depth, attempts: make(map[string]error)}
+	if err := collector.Collect(ctx, nil); err != nil {
+		return nil, err
+	}
+	return collector, nil
+}
+
+// Collect never turns arbitrary document arguments into executable requests.
+// Every path component must already be advertised by its collected parent.
+func (c *HelpCollector) Collect(ctx context.Context, path []string) (err error) {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	target := &c.Snapshot.Root
+	for _, name := range path {
+		if !helpCommandName.MatchString(name) || len(target.Sources) == 0 || target.Child(name) == nil {
+			return fmt.Errorf("command path is not advertised by collected help")
 		}
-		var parsed Command
-		var reference string
-		var err error
-		for _, helpFlag := range []string{"-h", "--help"} {
-			if calls >= options.MaxCommands {
-				commandLimit = true
-				break
-			}
-			args := append(slices.Clone(current.path), helpFlag)
-			calls++
-			var output string
-			output, err = commandOutput(ctx, options.Binary, helpEnvironment, true, args...)
-			parsed = parseHelp(output)
-			reference = strings.Join(append([]string{options.Binary}, args...), " ")
-			if err == nil && len(parsed.Flags) == 0 && len(parsed.Commands) == 0 {
-				err = fmt.Errorf("%s: could not recognize help flags or commands", reference)
-			}
-			if err == nil || ctx.Err() != nil {
-				break
-			}
+		target = target.Child(name)
+	}
+	if len(path) > c.depth {
+		return fmt.Errorf("help depth limit %d reached for %s", c.depth, strings.Join(path, " "))
+	}
+	if len(target.Sources) > 0 {
+		return nil
+	}
+	key := strings.Join(path, " ")
+	if previous, ok := c.attempts[key]; ok {
+		return previous
+	}
+	defer func() { c.attempts[key] = err }()
+	for _, args := range helpRequests(c.options.Binary, path) {
+		if c.calls >= c.options.MaxCommands {
+			return fmt.Errorf("help call limit %d reached for %s", c.options.MaxCommands, key)
 		}
-		if err != nil {
-			if index == 0 || ctx.Err() != nil {
-				return nil, warnings, err
+		c.calls++
+		output, callErr := helpOutput(ctx, c.options.Binary, args)
+		if callErr != nil {
+			err = callErr
+			if ctx.Err() != nil {
+				return err
 			}
-			warnings = append(warnings, fmt.Sprintf("Help unavailable; keeping a placeholder: %.300s", err))
+			continue
+		}
+		helpName := c.Snapshot.Root.UsageName
+		if helpName == "" {
+			helpName = c.options.Tool
+		}
+		parsed, parseErr := parseHelpPage(output, c.options.Binary, helpName, path)
+		reference := strings.Join(append([]string{c.options.Binary}, args...), " ")
+		if parseErr != nil {
+			err = fmt.Errorf("%s: %w", reference, parseErr)
 			continue
 		}
 		evidence := Evidence{Kind: "help", Reference: reference, Detail: "Help may omit flags, value rules and commands."}
-		snapshot.Sources = append(snapshot.Sources, evidence)
-		target := &snapshot.Root
-		for _, name := range current.path {
-			target = helpChild(target, name)
+		parsed.Name, parsed.Sources = target.Name, []Evidence{evidence}
+		if err := validateCommand(&parsed, c.Snapshot.Tool+" "+key); err != nil {
+			return err
 		}
-		target.Flags = parsed.Flags
-		target.Sources = []Evidence{evidence}
-		depthLimit := false
-		for _, child := range parsed.Commands {
-			helpChild(target, child.Name)
-			path := append(slices.Clone(current.path), child.Name)
-			key := strings.Join(path, " ")
-			if seen[key] {
-				continue
-			}
-			if current.depth >= maxDepth {
-				depthLimit = true
-				continue
-			}
-			if len(requests) >= options.MaxCommands {
-				commandLimit = true
-				continue
-			}
-			requests = append(requests, request{path: path, depth: current.depth + 1})
-			seen[key] = true
-		}
-		if depthLimit {
-			warnings = append(warnings, fmt.Sprintf("%s: help depth limit %d reached; deeper commands remain placeholders", reference, maxDepth))
-		}
+		*target = parsed
+		c.Snapshot.Sources = append(c.Snapshot.Sources, evidence)
+		c.Revision++
+		return nil
 	}
-	if commandLimit {
-		warnings = append(warnings, fmt.Sprintf("help call limit %d reached; unvisited commands remain placeholders", options.MaxCommands))
-	}
-	if err := snapshot.Validate(); err != nil {
-		return nil, warnings, err
-	}
-	return snapshot, warnings, nil
+	return err
 }
 
 func helpChild(command *Command, name string) *Command {
@@ -202,6 +196,89 @@ func helpChild(command *Command, name string) *Command {
 	}
 	command.Commands = append(command.Commands, Command{Name: name})
 	return &command.Commands[len(command.Commands)-1]
+}
+
+// Usage alone is valid evidence for a command without flags or subcommands.
+// Require the requested path so banners, empty headings and unrelated help
+// do not turn a failed request into a successfully collected command.
+func helpUsageInfo(output, tool string, path []string) (matched, needsDetails bool, usageName string) {
+	output = helpANSI.ReplaceAllString(output, "")
+	primary := helpUsage.MatchString(output)
+	usage, body := false, false
+	for line := range strings.SplitSeq(output, "\n") {
+		if match := helpUsage.FindStringIndex(line); match != nil {
+			usage, body = true, false
+			line = line[match[1]:]
+		} else {
+			trimmed := strings.ToLower(strings.TrimSpace(line))
+			if trimmed == "" {
+				if body {
+					usage = false
+				}
+				continue
+			}
+			if strings.HasSuffix(trimmed, ":") {
+				usage = !primary && (trimmed == "example usage:" || trimmed == "further help:")
+				body = false
+				continue
+			}
+		}
+		words := strings.Fields(line)
+		body = body || len(words) > 0
+		if !usage || len(words) < len(path)+1 {
+			continue
+		}
+		name := strings.TrimSuffix(filepath.Base(words[0]), ".exe")
+		if !helpCommandName.MatchString(name) || strings.HasSuffix(name, ":") || (tool != "" && name != tool) {
+			continue
+		}
+		matches := true
+		for i, name := range path {
+			if !slices.Contains(strings.Split(strings.Trim(words[i+1], "[]():"), "|"), name) {
+				matches = false
+			}
+		}
+		if !matches || !helpUsageTail(words[len(path)+1:]) {
+			continue
+		}
+		matched, usageName = true, name
+		details := false
+		for _, word := range words[len(path)+1:] {
+			switch strings.ToLower(strings.Trim(word, "[]<>()")) {
+			case "options", "flags":
+				details = true
+			case "command", "commands", "subcommand", "subcommands":
+				// An advertised command may take another command as an argument.
+				// A root placeholder alone provides no command-list evidence.
+				details = details || len(path) == 0
+			}
+		}
+		if !details {
+			return true, false, usageName
+		}
+	}
+	return matched, matched, usageName
+}
+
+// Bare lowercase words in a synopsis can be deeper command names. Do not
+// assign that page's flags to the requested parent. Bracketed groups and
+// explicit metavariables describe arguments rather than a fixed command path.
+func helpUsageTail(words []string) bool {
+	depth := 0
+	for _, word := range words {
+		if depth == 0 && helpCommandName.MatchString(word) && !helpMetavar.MatchString(word) && word != "..." {
+			return false
+		}
+		for _, char := range word {
+			switch char {
+			case '[', '<', '(':
+				depth++
+			case ']', '>', ')':
+				depth = max(0, depth-1)
+			}
+		}
+	}
+	return true
 }
 
 func parseHelp(output string) Command {
@@ -234,11 +311,18 @@ func parseHelp(output string) Command {
 			usage = false
 			continue
 		}
+		indent := len(line) - len(strings.TrimLeft(line, " "))
+		if commands && (commandIndent < 0 || indent == commandIndent) {
+			if label := helpCommandLabel.FindStringSubmatch(line); label != nil {
+				commandIndent = indent
+				helpChild(&command, label[1])
+				continue
+			}
+		}
 		if strings.HasSuffix(lower, ":") {
 			commands = helpCommandHeading.MatchString(lower)
 			commandIndent = -1
 		}
-		indent := len(line) - len(strings.TrimLeft(line, " "))
 		if commands && (commandIndent < 0 || indent == commandIndent) {
 			if row := helpCommandRow.FindStringSubmatch(line); row != nil {
 				commandIndent = indent

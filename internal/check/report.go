@@ -24,6 +24,8 @@ type Diagnostic struct {
 }
 
 type Result struct {
+	// HelpPath requests missing help for an advertised command, not document argv.
+	HelpPath    []string         `json:"-"`
 	Location    extract.Location `json:"location"`
 	Command     string           `json:"command"`
 	CLI         string           `json:"cli,omitempty"`

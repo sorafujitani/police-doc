@@ -51,6 +51,17 @@ Options:
   --omit
     Dependency types to omit.
 `, nil, map[string]string{"-E": "unknown", "--save-exact": "unknown", "-g": "unknown", "--global": "unknown", "--omit": "required", "-w": "required", "--workspace": "required"}},
+		{"brew-subcommands", `Usage: brew services [subcommand]
+
+Subcommands:
+  list:
+    List services.
+  start:
+    Start a service.
+
+Options:
+  --json  JSON output
+`, []string{"list", "start"}, map[string]string{"--json": "unknown"}},
 		{"docker", `Usage: docker [OPTIONS] COMMAND
 
 Common Commands:
@@ -114,6 +125,20 @@ func helpExecutable(t *testing.T, script string) string {
 	return binary
 }
 
+func collectTestPaths(t *testing.T, options HelpOptions, paths ...string) *Snapshot {
+	t.Helper()
+	collector, err := NewHelpCollector(t.Context(), options, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range paths {
+		if err := collector.Collect(t.Context(), strings.Fields(path)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return collector.Snapshot
+}
+
 func TestCollectHelpVersions(t *testing.T) {
 	for _, tc := range []struct{ output, want string }{
 		{"v24.21.0", "24.21.0"},
@@ -129,10 +154,7 @@ else
   printf 'Usage: acme [options]\n  --help  Show help\n'
 fi
 `)
-			contract, _, err := CollectHelp(context.Background(), HelpOptions{Binary: binary})
-			if err != nil {
-				t.Fatal(err)
-			}
+			contract := collectTestPaths(t, HelpOptions{Binary: binary})
 			if contract.Version != tc.want {
 				t.Fatalf("version = %q, want %q", contract.Version, tc.want)
 			}
@@ -154,10 +176,7 @@ case "$*" in
   *) exit 11 ;;
 esac
 `)
-	snapshot, warnings, err := CollectHelp(context.Background(), HelpOptions{Binary: binary})
-	if err != nil || len(warnings) != 0 {
-		t.Fatalf("collection failed: %v %v", err, warnings)
-	}
+	snapshot := collectTestPaths(t, HelpOptions{Binary: binary}, "container", "container run")
 	calls, err := os.ReadFile(log)
 	if err != nil || string(calls) != "--version\n-h\ncontainer -h\ncontainer run -h\n" {
 		t.Fatalf("unexpected calls: %q %v", calls, err)
@@ -165,6 +184,103 @@ esac
 	run := snapshot.Root.Child("container").Child("run")
 	if snapshot.Tool != "acme" || snapshot.Version != "1.2.3-beta.1" || snapshot.OS != runtime.GOOS || len(snapshot.Sources) != 4 || len(run.Flags) != 2 || run.Flags[0].Value != "required" || len(run.Sources) != 1 {
 		t.Fatalf("unexpected snapshot: %+v; run=%+v", snapshot, run)
+	}
+}
+
+func TestCollectHelpUsageOnly(t *testing.T) {
+	binary := helpExecutable(t, `
+case "$*" in
+  --version) echo 1.0.0 ;;
+  -h) printf 'Usage:\n  acme completion  List completions\n  acme shrinkwrap  Create a lockfile\n\nAll commands:\n  completion, shrinkwrap\n' ;;
+  'completion -h') printf 'Tab Completion\n\nUsage:\nacme completion\n\nOptions:\n' ;;
+  'shrinkwrap -h') printf 'Lock dependencies\n\nUsage:\nacme shrinkwrap\n'; exit 1 ;;
+  *) exit 11 ;;
+esac
+`)
+	snapshot := collectTestPaths(t, HelpOptions{Binary: binary}, "completion", "shrinkwrap")
+	for _, name := range []string{"completion", "shrinkwrap"} {
+		child := snapshot.Root.Child(name)
+		if child == nil || len(child.Sources) != 1 || len(child.Flags) != 0 || len(child.Commands) != 0 {
+			t.Fatalf("usage-only command must have evidence, not a placeholder: %+v", child)
+		}
+	}
+	root := helpExecutable(t, `printf '\033[32mUsage:\033[0m acme FILE\n'`)
+	if snapshot := collectTestPaths(t, HelpOptions{Binary: root, Version: "1.0.0"}); len(snapshot.Root.Sources) != 1 {
+		t.Fatalf("usage-only root was rejected: %+v", snapshot)
+	}
+}
+
+func TestCollectBrewHelp(t *testing.T) {
+	log := filepath.Join(t.TempDir(), "calls")
+	t.Setenv("POLICEDOC_TEST_CALLS", log)
+	binary := helpExecutable(t, `
+printf '%s\n' "$*" >> "$POLICEDOC_TEST_CALLS"
+case "$*" in
+  --version) echo 'Homebrew 5.0.0' ;;
+  'commands --quiet') printf '%s\n' --prefix tap install services help tap 'bad;touch marker' ../escape ;;
+  'help tap') printf 'Usage: brew tap [options] [user/repo]\n  --force  Force tap\n' ;;
+  'help install') printf 'Usage: brew install [options] formula|cask [...]\n  --formula  Install a formula\n' ;;
+  'help services') printf 'Usage: brew services [subcommand]\nSubcommands:\n  list:\n    List services\n' ;;
+  'help services list') printf 'Usage: brew services list\n  --json  JSON output\n' ;;
+  'help help') printf 'Example usage:\n  brew install FORMULA\n\nFurther help:\n  brew commands\n  brew help [COMMAND]\n' ;;
+  *) echo 'error: unexpected execution'; exit 11 ;;
+esac
+`)
+	brew := filepath.Join(filepath.Dir(binary), "brew")
+	if err := os.Rename(binary, brew); err != nil {
+		t.Fatal(err)
+	}
+	zero := 0
+	for _, tc := range []struct {
+		name  string
+		depth *int
+		limit int
+		calls string
+		warn  string
+	}{
+		{"full", nil, 6, "--version\ncommands --quiet\nhelp tap\nhelp install\nhelp services\nhelp help\nhelp services list\n", ""},
+		{"call-limit", nil, 2, "--version\ncommands --quiet\nhelp tap\n", "help call limit"},
+		{"depth-limit", &zero, 100, "--version\ncommands --quiet\n", "help depth limit"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := os.WriteFile(log, nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			collector, err := NewHelpCollector(t.Context(), HelpOptions{Binary: brew, MaxDepth: tc.depth, MaxCommands: tc.limit}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, path := range []string{"tap", "install", "services", "help", "services list"} {
+				err = collector.Collect(t.Context(), strings.Fields(path))
+				if err != nil {
+					break
+				}
+			}
+			if (tc.warn == "" && err != nil) || (tc.warn != "" && (err == nil || !strings.Contains(err.Error(), tc.warn))) {
+				t.Fatalf("expected %q, got %v", tc.warn, err)
+			}
+			snapshot := collector.Snapshot
+			calls, err := os.ReadFile(log)
+			if err != nil || string(calls) != tc.calls {
+				t.Fatalf("unexpected brew calls: %q %v", calls, err)
+			}
+			if len(snapshot.Root.Commands) != 4 || len(snapshot.Root.Sources) != 1 || len(snapshot.Root.Flags) != 1 || snapshot.Root.Flags[0].Name != "--prefix" {
+				t.Fatalf("invalid brew command list: %+v", snapshot.Root)
+			}
+			if tc.warn != "" {
+				return
+			}
+			for _, name := range []string{"tap", "install"} {
+				child := snapshot.Root.Child(name)
+				if child == nil || len(child.Flags) != 1 || len(child.Sources) != 1 {
+					t.Fatalf("brew %s was not collected: %+v", name, child)
+				}
+			}
+			list := snapshot.Root.Child("services").Child("list")
+			if list == nil || len(list.Flags) != 1 || list.Flags[0].Name != "--json" || len(list.Sources) != 1 {
+				t.Fatalf("brew services list was not collected: %+v", list)
+			}
+		})
 	}
 }
 
@@ -176,8 +292,8 @@ printf '%s\n' "$*" >> "$POLICEDOC_TEST_CALLS"
 case "$*" in
   --version) printf 'quartz 4.5.6\n' ;;
   -h) printf 'Usage: quartz COMMAND\nThese are common Quartz commands for local work:\n  %s     Dynamic command\n      continuation  Not another command\n  %s     Repeated listing\n  bad;touch marker  Invalid command name\n  ../escape  Invalid command name\n' "$POLICEDOC_TEST_CHILD" "$POLICEDOC_TEST_CHILD" ;;
-  "$POLICEDOC_TEST_CHILD -h") printf 'Usage: quartz group COMMAND\nSubcommands:\n  leaf  Nested command\n' ;;
-  "$POLICEDOC_TEST_CHILD leaf -h") printf 'Usage: quartz group leaf [OPTIONS]\nOptions:\n  --destination <file>  Output file\n' ;;
+  "$POLICEDOC_TEST_CHILD -h") printf 'Usage: quartz %s COMMAND\nSubcommands:\n  leaf  Nested command\n' "$POLICEDOC_TEST_CHILD" ;;
+  "$POLICEDOC_TEST_CHILD leaf -h") printf 'Usage: quartz %s leaf [OPTIONS]\nOptions:\n  --destination <file>  Output file\n' "$POLICEDOC_TEST_CHILD" ;;
   *) exit 11 ;;
 esac
 `)
@@ -187,10 +303,7 @@ esac
 			if err := os.WriteFile(log, nil, 0o600); err != nil {
 				t.Fatal(err)
 			}
-			snapshot, warnings, err := CollectHelp(context.Background(), HelpOptions{Binary: binary, Tool: "quartz"})
-			if err != nil || len(warnings) != 0 {
-				t.Fatalf("discovery failed: %v %v", err, warnings)
-			}
+			snapshot := collectTestPaths(t, HelpOptions{Binary: binary, Tool: "quartz"}, name, name+" leaf")
 			calls, err := os.ReadFile(log)
 			want := "--version\n-h\n" + name + " -h\n" + name + " leaf -h\n"
 			if err != nil || string(calls) != want {
@@ -217,7 +330,7 @@ case "$*" in
   -h) printf 'Usage: acme COMMAND\nCommands:\n  branch       A group\n  unavailable  Broken plugin\n  empty        Unsupported help\n  recursive    Repeating help\n' ;;
   'branch -h') printf 'Usage: acme branch COMMAND\nCommands:\n  leaf  A leaf\n' ;;
   'branch leaf -h') printf 'Usage: acme branch leaf [OPTIONS]\n  --output FILE  Output file\n' ;;
-  'unavailable -h') exit 3 ;;
+  unavailable*) exit 3 ;;
   empty*) echo 'No supported help format' ;;
   recursive*) printf 'Usage: acme recursive COMMAND\nCommands:\n  recursive  Repeating help\n' ;;
   *) exit 11 ;;
@@ -225,41 +338,43 @@ esac
 `)
 	zero, one := 0, 1
 	for _, tc := range []struct {
-		name     string
-		depth    *int
-		limit    int
-		calls    int
-		warnings []string
+		name         string
+		depth        *int
+		limit, calls int
+		paths        []string
+		want         string
 	}{
-		{"root-only", &zero, 100, 1, []string{"help depth limit"}},
-		{"one-level", &one, 100, 7, []string{"help depth limit", "unavailable --help", "could not recognize help"}},
-		{"call-limit", nil, 2, 2, []string{"help call limit"}},
-		{"default-depth", nil, 100, 10, []string{"help depth limit", "unavailable --help", "could not recognize help"}},
+		{"unused", nil, 100, 1, nil, ""},
+		{"root-only", &zero, 100, 1, []string{"branch"}, "help depth limit"},
+		{"one-level", &one, 100, 2, []string{"branch", "branch leaf"}, "help depth limit"},
+		{"call-limit", nil, 2, 2, []string{"branch", "branch leaf"}, "help call limit"},
+		{"failure-reuse", nil, 100, 3, []string{"unavailable", "unavailable"}, "exit status"},
+		{"unparsed", nil, 100, 3, []string{"empty"}, "could not recognize help"},
+		{"parent-help", nil, 100, 4, []string{"recursive", "recursive recursive"}, "Usage does not describe"},
+		{"unadvertised", nil, 100, 1, []string{"unknown"}, "not advertised"},
+		{"uncollected-parent", nil, 100, 1, []string{"branch leaf"}, "not advertised"},
+		{"unsafe-name", nil, 100, 1, []string{"../escape"}, "not advertised"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if err := os.WriteFile(log, nil, 0o600); err != nil {
 				t.Fatal(err)
 			}
-			snapshot, warnings, err := CollectHelp(context.Background(), HelpOptions{
-				Binary: binary, Version: "1.0.0", MaxDepth: tc.depth, MaxCommands: tc.limit,
-			})
+			collector, err := NewHelpCollector(t.Context(), HelpOptions{Binary: binary, Version: "1.0.0", MaxDepth: tc.depth, MaxCommands: tc.limit}, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
+			for _, path := range tc.paths {
+				err = collector.Collect(t.Context(), strings.Fields(path))
+			}
+			if (tc.want == "" && err != nil) || (tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want))) {
+				t.Fatalf("expected %q, got %v", tc.want, err)
+			}
 			calls, err := os.ReadFile(log)
-			if err != nil || len(strings.Split(strings.TrimSpace(string(calls)), "\n")) != tc.calls {
+			if err != nil || strings.Count(string(calls), "\n") != tc.calls {
 				t.Fatalf("unexpected calls: %q %v", calls, err)
 			}
-			for _, want := range tc.warnings {
-				if !strings.Contains(strings.Join(warnings, "\n"), want) {
-					t.Fatalf("missing warning %q: %v", want, warnings)
-				}
-			}
-			if len(tc.warnings) == 0 && len(warnings) != 0 {
-				t.Fatalf("unexpected warnings: %v", warnings)
-			}
-			if snapshot.Root.Child("unavailable") == nil || len(snapshot.Root.Child("unavailable").Sources) != 0 {
-				t.Fatalf("unavailable command must remain a placeholder: %+v", snapshot.Root)
+			if len(collector.Snapshot.Root.Child("unavailable").Sources) != 0 {
+				t.Fatal("failed or unused command must remain a placeholder")
 			}
 		})
 	}
@@ -273,10 +388,13 @@ case "$*" in
   *) exit 11 ;;
 esac
 `)
+	collector, err := NewHelpCollector(t.Context(), HelpOptions{Binary: binary, Version: "1.0.0"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-	snapshot, _, err := CollectHelp(ctx, HelpOptions{Binary: binary, Version: "1.0.0"})
-	if !errors.Is(err, context.DeadlineExceeded) || snapshot != nil {
+	if err := collector.Collect(ctx, []string{"slow"}); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("cancellation must abort, not become a discovery warning: %v", err)
 	}
 }
@@ -290,7 +408,7 @@ func TestCollectHelpRejectsInvalidOptionsBeforeExecution(t *testing.T) {
 		{}, {Binary: binary, Tool: "bad/name"}, {Binary: binary, Version: "latest"},
 		{Binary: binary, MaxDepth: &negative}, {Binary: binary, MaxCommands: -1},
 	} {
-		if _, _, err := CollectHelp(context.Background(), options); err == nil {
+		if _, err := NewHelpCollector(t.Context(), options, nil); err == nil {
 			t.Errorf("accepted %+v", options)
 		}
 	}
@@ -315,27 +433,53 @@ esac
 		if err := os.WriteFile(log, nil, 0o600); err != nil {
 			t.Fatal(err)
 		}
-		snapshot, warnings, err := CollectHelp(context.Background(), HelpOptions{Binary: binary, MaxCommands: limit})
+		collector, err := NewHelpCollector(t.Context(), HelpOptions{Binary: binary, MaxCommands: limit}, nil)
+		if err == nil {
+			err = collector.Collect(t.Context(), []string{"next"})
+		}
 		calls, readErr := os.ReadFile(log)
 		if readErr != nil || strings.Count(string(calls), "\n") != limit+1 {
 			t.Fatalf("call budget %d violated: %q %v", limit, calls, readErr)
 		}
 		if limit == 1 {
-			if err == nil || snapshot != nil {
+			if err == nil || collector != nil {
 				t.Fatal("root fallback exceeded its budget")
 			}
 			continue
 		}
-		if err != nil {
-			t.Fatal(err)
-		}
-		child := snapshot.Root.Child("next")
-		if limit == 3 && (len(warnings) == 0 || len(child.Sources) != 0) {
+		child := collector.Snapshot.Root.Child("next")
+		if limit == 3 && (err == nil || len(child.Sources) != 0) {
 			t.Fatal("limited fallback did not leave a warned placeholder")
 		}
-		if limit == 4 && (len(warnings) != 0 || len(child.Flags) != 1 || !strings.HasSuffix(child.Sources[0].Reference, "next --help")) {
-			t.Fatalf("fallback failed: %+v %v", child, warnings)
+		if limit == 4 && (err != nil || len(child.Flags) != 1 || !strings.HasSuffix(child.Sources[0].Reference, "next --help")) {
+			t.Fatalf("fallback failed: %+v %v", child, err)
 		}
+	}
+}
+
+func TestHelpDisplayNameSurvivesCaching(t *testing.T) {
+	binary := helpExecutable(t, `
+case "$*" in
+  --version) echo 1.0.0 ;;
+  -h) printf 'Usage: /runtime/Canonical COMMAND\nCommands:\n  run  Run something\n  next  Next command\n' ;;
+  'run -h') printf 'Usage: /runtime/Canonical run\n' ;;
+  'next -h') printf 'Usage: /runtime/Canonical next\n' ;;
+  *) exit 11 ;;
+esac
+`)
+	snapshot := collectTestPaths(t, HelpOptions{Binary: binary}, "run")
+	if snapshot.Root.UsageName != "Canonical" || snapshot.Tool != "acme" {
+		t.Fatalf("invocation and help names were conflated: %+v", snapshot)
+	}
+	collector, err := NewHelpCollector(t.Context(), HelpOptions{Binary: binary, Version: snapshot.Version}, snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := collector.Collect(t.Context(), []string{"next"}); err != nil {
+		t.Fatal(err)
+	}
+	if collector.Revision != 1 {
+		t.Fatal("cached root help was recollected")
 	}
 }
 
@@ -346,12 +490,16 @@ func TestCollectHelpFailures(t *testing.T) {
 		{"ambiguous-version", `printf 'acme v1.2.3 using runtime v4.5.6\n'`, "single CLI version"},
 		{"empty", `if [ "$1" = --version ]; then echo 1.0.0; fi`, "could not recognize help"},
 		{"banner", `if [ "$1" = --version ]; then echo 1.0.0; else echo 'not a help page'; fi`, "could not recognize help"},
+		{"empty-usage", `if [ "$1" = --version ]; then echo 1.0.0; else printf 'Usage:\n\nOptions:\n'; fi`, "Usage does not describe"},
+		{"invalid-usage", `if [ "$1" = --version ]; then echo 1.0.0; else echo 'Usage: <program>'; fi`, "Usage does not describe"},
+		{"unparsed-commands", `if [ "$1" = --version ]; then echo 1.0.0; else echo 'Usage: acme COMMAND'; fi`, "could not recognize help"},
+		{"unparsed-options", `if [ "$1" = --version ]; then echo 1.0.0; else echo 'Usage: acme [OPTIONS]'; fi`, "could not recognize help"},
 		{"usage-error", `if [ "$1" = --version ]; then echo 1.0.0; else printf 'Usage: acme [options]\n  --help\nacme: error: unknown command\n'; exit 2; fi`, "CLI reported an error"},
 		{"fatal-exit", `if [ "$1" = --version ]; then echo 1.0.0; else printf 'Usage: acme [options]\n  --help\n'; exit 3; fi`, "exit status"},
 		{"output-limit", `if [ "$1" = --version ]; then echo 1.0.0; else printf 'Usage: acme [options]\n  --help\n'; head -c 1048577 /dev/zero; exit 129; fi`, "exceeds 1 MiB"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, _, err := CollectHelp(context.Background(), HelpOptions{Binary: helpExecutable(t, tc.script)})
+			_, err := NewHelpCollector(t.Context(), HelpOptions{Binary: helpExecutable(t, tc.script)}, nil)
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("wanted %q, got %v", tc.want, err)
 			}
@@ -360,12 +508,12 @@ func TestCollectHelpFailures(t *testing.T) {
 	binary := helpExecutable(t, "exec sleep 10")
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
-	if _, _, err := CollectHelp(ctx, HelpOptions{Binary: binary}); !errors.Is(err, context.DeadlineExceeded) {
+	if _, err := NewHelpCollector(ctx, HelpOptions{Binary: binary}, nil); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("timeout ignored: %v", err)
 	}
 	ctx, cancel = context.WithCancel(context.Background())
 	cancel()
-	if _, _, err := CollectHelp(ctx, HelpOptions{Binary: binary}); !errors.Is(err, context.Canceled) {
+	if _, err := NewHelpCollector(ctx, HelpOptions{Binary: binary}, nil); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancellation ignored: %v", err)
 	}
 }

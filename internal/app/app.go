@@ -109,7 +109,7 @@ func scan(ctx context.Context, args []string, stdout, stderr io.Writer) (int, er
 		return 0, err
 	}
 	report := check.NewReport(len(files))
-	collected := make(map[string]collectedHelp)
+	collected := make(map[string]*collectedHelp)
 	for _, path := range files {
 		if err := ctx.Err(); err != nil {
 			return 0, err

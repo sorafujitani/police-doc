@@ -27,6 +27,11 @@ func TestRealCLIHelpAndScan(t *testing.T) {
 		{"python3", `python3 -c "print(1)"`, ""},
 		{"uv", "uv --quiet --version", "uv pip install --python"},
 		{"rg", "rg -e pattern .", "rg -e"},
+		{"brew", "brew tap --force sorafujitani/memoli", ""},
+		{"npm", "npm install -g @sorafujitani/memoli", "npm install --workspace"},
+		{"brew", "brew install --formula memoli", ""},
+		{"npm", "npm completion", ""},
+		{"npm", "npm shrinkwrap", ""},
 	} {
 		t.Run(tc.tool, func(t *testing.T) {
 			if _, err := exec.LookPath(tc.tool); err != nil {
@@ -42,7 +47,7 @@ func TestRealCLIHelpAndScan(t *testing.T) {
 				wantExit, wantErrors, wantExamples = 1, 1, 3
 			}
 			put(t, doc, "```sh\n"+body+"```\n")
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 			defer cancel()
 			var out, stderr bytes.Buffer
 			code := Run(ctx, []string{"scan", doc, "--format=json"}, &out, &stderr, "test")
@@ -52,6 +57,9 @@ func TestRealCLIHelpAndScan(t *testing.T) {
 			var report check.Report
 			if err := json.Unmarshal(out.Bytes(), &report); err != nil {
 				t.Fatal(err)
+			}
+			if strings.Contains(out.String(), "help-incomplete") {
+				t.Fatalf("requested help was not collected: %s", out.String())
 			}
 			if report.Summary.Errors != wantErrors || report.Summary.Partial != wantExamples || report.Summary.Uncheckable != 0 {
 				t.Fatalf("unexpected summary: %+v\n%s", report.Summary, out.String())

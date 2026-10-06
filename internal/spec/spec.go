@@ -22,10 +22,12 @@ type Evidence struct {
 }
 
 type Command struct {
-	Name     string     `json:"name,omitempty"`
-	Commands []Command  `json:"commands,omitempty"`
-	Flags    []Flag     `json:"flags,omitempty"`
-	Sources  []Evidence `json:"sources,omitempty"`
+	// UsageName is the program name printed in help, which may differ from argv[0].
+	UsageName string     `json:"usage_name,omitempty"`
+	Name      string     `json:"name,omitempty"`
+	Commands  []Command  `json:"commands,omitempty"`
+	Flags     []Flag     `json:"flags,omitempty"`
+	Sources   []Evidence `json:"sources,omitempty"`
 }
 
 type Flag struct {
@@ -47,6 +49,9 @@ func (s *Snapshot) Validate() error {
 }
 
 func validateCommand(c *Command, path string) error {
+	if c.UsageName != "" && !validName(c.UsageName) {
+		return fmt.Errorf("%s: invalid help program name", path)
+	}
 	if err := validateEvidence(c.Sources); err != nil {
 		return fmt.Errorf("%s: %w", path, err)
 	}

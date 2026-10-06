@@ -10,34 +10,26 @@ import (
 	"path/filepath"
 	"runtime"
 
-	"github.com/sorafujitani/police-doc/internal/extract"
 	"github.com/sorafujitani/police-doc/internal/spec"
 )
 
 // Bump when the cache layout or collector's interpretation changes.
-const helpCacheVersion = 2
+const helpCacheVersion = 4
 
 type cachedHelp struct {
 	SchemaVersion int            `json:"schema_version"`
 	Binary        string         `json:"binary"`
 	Fingerprint   string         `json:"fingerprint"`
 	Snapshot      *spec.Snapshot `json:"snapshot"`
-	Warnings      []string       `json:"warnings,omitempty"`
 }
 
-func helpCachePath(directory string, example extract.Example) (string, error) {
+func helpCachePath(directory, binary, tool string) (string, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return "", err
 	}
-	key := cwd + "\x00" + runtime.GOOS + "/" + runtime.GOARCH + "\x00" + example.Words[0].Value
-	if example.LocalPackage {
-		origin, err := filepath.Abs(filepath.Dir(example.Location.File))
-		if err != nil {
-			return "", err
-		}
-		key += "\x00npx\x00" + origin
-	}
+	// Resolution is origin-specific; help belongs to the selected executable.
+	key := cwd + "\x00" + runtime.GOOS + "/" + runtime.GOARCH + "\x00" + binary + "\x00" + tool
 	return filepath.Join(directory, fmt.Sprintf("%x.json", sha256.Sum256([]byte(key)))), nil
 }
 

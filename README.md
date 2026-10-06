@@ -110,21 +110,35 @@ Exit code `0` does not mean that every example was checked. Always inspect cover
 ## Collection and caching
 
 The scanner queries each executable's version once per run.
-It reuses help when the version and executable metadata are unchanged.
+It reuses successful help when the version and executable metadata are unchanged,
+and extends the cache when new examples need additional commands.
+Examples that resolve to the same executable share its cache, including `npx`
+examples in different directories. Different local executables remain separate.
+Failed requests are retried on the next scan; they are not stored as permanent failures.
 Every run still checks all input examples. Use `--refresh` after plugin or environment changes.
 
-Collection tries `-h`, then `--help`, and explores advertised subcommands.
-Limits are three levels and 100 help calls per executable, including failed calls.
+Collection starts with root help, then follows only advertised subcommands reached
+while checking the examples. Flag values, positional arguments, dynamic words and
+forwarded arguments are not used as help requests. Unused commands are not visited.
+Most CLIs use `-h`, then `--help` as a fallback.
+Limits are three levels and 100 help calls per executable per scan, including failed calls.
 Each call allows ten seconds and 1 MiB of combined output, with no interactive input.
-For Go, fixed `version`, `help`, and `help build` calls are used instead.
-Only Go's root command list and build flags are collected; toolchain downloads are disabled.
+For Homebrew, `brew commands --quiet` lists commands and `brew help <command>`
+collects their help within the same limits.
+For Go, `version`, `help`, and `help <command>` are used instead;
+automatic toolchain downloads are disabled.
 
 Common static `sudo` and bare-executable `npx` forms resolve to the inner CLI.
 Neither wrapper runs, and no packages are installed.
 For `npx`, lookup starts in ancestor `node_modules/.bin` directories, then checks `PATH`.
 
 Missing executables or failed collection produce warnings and uncheckable results.
-A failed child-help request leaves a placeholder and a warning.
+A failed child-help request leaves a placeholder and warns only on examples that need it.
+Unrelated failures and unvisited commands do not produce warnings on other examples.
+Usage-only help is accepted for commands without listed flags or subcommands.
+Help for a parent or a different command is not used to validate a child.
+An ambiguous synopsis, such as an unmarked lowercase word that could name a
+further subcommand, remains uncheckable rather than proving a flag error.
 Cache-write failures warn but retain the collected help for the current scan.
 Caches are internal snapshots, not a supported specification-input format.
 Old or corrupt caches are rebuilt automatically.
@@ -142,7 +156,8 @@ go vet ./...
 go build ./cmd/policedoc
 ```
 
-Optional integration tests use installed Go, Git, Node.js, Python, uv, and ripgrep.
+Optional integration tests use installed Go, Git, Node.js, Python, uv, ripgrep,
+Homebrew, and npm.
 
 ```sh
 POLICEDOC_REAL_CLI_TESTS=1 go test ./internal/app -run TestRealCLIHelpAndScan -v
@@ -156,17 +171,11 @@ goreleaser check
 goreleaser release --snapshot --clean
 ```
 
-The Nix build runs the tests and checks the installed binary. When dependencies
-change, update `vendorHash` in `flake.nix` to the hash reported by Nix after setting
-it to `pkgs.lib.fakeHash`.
+The Nix build runs the tests and checks the installed binary. Use an explicit
+`path:` source before staging new files; Git-backed flakes omit untracked files.
+Snapshot builds do not publish anything.
 
-Before the first release, add the repository secret `HOMEBREW_TAP_GITHUB_TOKEN`.
-Use a token with **Contents: read and write** access to
-https://github.com/sorafujitani/homebrew-tap. The default `GITHUB_TOKEN` cannot
-update a separate repository.
-
-Push a semantic version tag such as `v0.1.0` to publish release archives and
-checksums. Stable releases also update `Formula/policedoc.rb` in the tap.
-Prereleases do not update the formula. Snapshot builds do not publish anything.
+Follow the [release guide](docs/releasing.md) to choose a version, validate the
+commit, publish its tag, and verify the release assets and Homebrew formula.
 
 See the [checking specification](docs/init.md). Licensed under [MIT](LICENSE).

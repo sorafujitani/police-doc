@@ -35,12 +35,12 @@ func Example(example extract.Example, snapshot *spec.Snapshot) Result {
 	result.CLI, result.Version, result.OS = snapshot.Tool, snapshot.Version, snapshot.OS
 	result.Coverage = "partial"
 	command := &snapshot.Root
-	sources := func() []spec.Evidence {
-		if len(command.Sources) > 0 {
-			return command.Sources
-		}
-		return snapshot.Sources
+	var path []string
+	evidence := command.Sources
+	if len(evidence) == 0 {
+		evidence = snapshot.Sources
 	}
+	sources := func() []spec.Evidence { return evidence }
 scan:
 	for i := 1; i < len(example.Words); i++ {
 		if len(command.Sources) == 0 && len(command.Flags) == 0 {
@@ -82,7 +82,11 @@ scan:
 			continue
 		}
 		if child := command.Child(word); child != nil {
+			path = append(path, word)
 			command = child
+			if len(child.Sources) > 0 {
+				evidence = child.Sources
+			}
 			continue
 		}
 		// Help does not establish positional bounds or forwarding semantics.
@@ -93,6 +97,7 @@ scan:
 	code, message := "incomplete-spec", "Help is incomplete; hidden entries, argument bounds and lifecycle changes are not checked."
 	if len(command.Sources) == 0 && len(command.Flags) == 0 {
 		result.Coverage = "uncheckable"
+		result.HelpPath = path
 		code, message = "unavailable-spec", "The command is known, but its help has not been collected."
 	}
 	add("info", "uncheckable", code, message, sources())

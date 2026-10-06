@@ -246,7 +246,7 @@ func TestHelpCacheRejectsUnsupportedData(t *testing.T) {
 	}
 	for _, data := range []string{
 		"{broken", "{}", valid + "{}",
-		strings.Replace(valid, `"schema_version":2`, `"schema_version":1`, 1),
+		strings.Replace(valid, fmt.Sprintf(`"schema_version":%d`, helpCacheVersion), fmt.Sprintf(`"schema_version":%d`, helpCacheVersion-1), 1),
 		strings.Replace(valid, `"root":{}`, `"root":{"coverage":{"flags":true}}`, 1),
 		strings.Replace(valid, `"tool":"alpha"`, `"tool":"other"`, 1),
 		valid + strings.Repeat(" ", (8<<20)+1),

@@ -26,6 +26,7 @@ func TestSnapshotValidation(t *testing.T) {
 		{"version", func(s *Snapshot) { s.Version = "latest" }},
 		{"tool", func(s *Snapshot) { s.Tool = "../acme" }},
 		{"root-name", func(s *Snapshot) { s.Root.Name = "acme" }},
+		{"help-name", func(s *Snapshot) { s.Root.UsageName = "../acme" }},
 		{"arity", func(s *Snapshot) { s.Root.Flags[0].Value = "none" }},
 		{"bad-flag", func(s *Snapshot) { s.Root.Flags[0].Name = "--" }},
 		{"duplicate-flag", func(s *Snapshot) { s.Root.Flags = append(s.Root.Flags, s.Root.Flags[0]) }},
@@ -65,10 +66,7 @@ esac
 	if err := os.WriteFile(binary, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	snapshot, warnings, err := CollectHelp(context.Background(), HelpOptions{Binary: binary})
-	if err != nil || len(warnings) != 0 {
-		t.Fatalf("Go collection: %v %v", err, warnings)
-	}
+	snapshot := collectTestPaths(t, HelpOptions{Binary: binary}, "build")
 	data, err := os.ReadFile(log)
 	if err != nil || string(data) != "version\nhelp\nhelp build\n" {
 		t.Fatalf("unexpected process calls: %q %v", data, err)
@@ -82,7 +80,7 @@ esac
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, _, err := CollectHelp(ctx, HelpOptions{Binary: binary}); err == nil {
+	if _, err := NewHelpCollector(ctx, HelpOptions{Binary: binary}, nil); err == nil {
 		t.Fatal("cancellation ignored")
 	}
 }

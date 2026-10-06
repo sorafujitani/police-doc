@@ -11,17 +11,26 @@ Shell fences labeled `sh`, `bash`, and `console` are supported.
 Continuation lines, pipes, `&&`, and `||` are parsed while preserving source locations.
 
 The scanner locates executables used by the examples and collects their versions and help.
-It follows advertised subcommands to a depth of three, with at most 100 help calls per executable.
+It collects root help, then follows only advertised subcommands needed by the examples.
+The same argument traversal drives collection and checking, so flag values, positional
+arguments, dynamic words and forwarded tails cannot become help requests.
+Each scan allows a depth of three and at most 100 help calls per executable.
 Each call is limited to ten seconds and 1 MiB of combined stdout and stderr.
-For Go, fixed requests collect root command names and `go build` flags.
-Details of other Go subcommands are not collected.
+Unused commands consume no calls and cause no warnings.
+For Homebrew, `brew commands --quiet` and `brew help <command>` provide the command list and help.
+Go uses `version`, `help` and `help <command>`, with automatic toolchain downloads disabled.
+Usage-only help can describe an advertised command without flags or subcommands.
+A child's help must describe that child; parent help is not child evidence.
 
 Supported static `sudo` and `npx` forms resolve to the inner CLI.
 Wrappers are not executed and packages are not installed.
 
 ## Caching
 
-Collected results are cached automatically.
+Successful help is cached automatically and extended as new commands are needed.
+Cache identity includes the selected executable, not the document's directory.
+Different `npx` origins share help only when they resolve to the same executable.
+Failures are reused only within the current scan and retried on the next scan.
 Help is recollected when the executable's version or metadata changes.
 Use `--refresh` after changes such as plugin updates.
 Every run checks the document examples again.
@@ -37,7 +46,7 @@ Outdated cache formats and corrupt entries are recollected.
 | A flag explicitly requiring a value has none | Confirmed error |
 | A flag is absent from help | Review warning |
 | The CLI's help cannot be collected | Warning and uncheckable results |
-| A subcommand's detailed help is unavailable | That command is uncheckable |
+| A subcommand's detailed help is unavailable or exceeds a collection limit | Warning and uncheckable results only for examples that need it |
 
 Help is not a complete specification.
 Hidden flags, required flags, and positional argument bounds are not inferred.
