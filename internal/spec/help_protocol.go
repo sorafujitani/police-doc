@@ -82,16 +82,16 @@ func parseHelpPage(output, binary, tool string, path []string) (Command, error) 
 		// canonical interpreter or an executable alias instead of argv[0].
 		expectedName = ""
 	}
-	matched, needsDetails, usageName, subcommandFirst, flagsAfterPositionals := helpUsageInfo(output, expectedName, path)
-	parsed.UsageName, parsed.SubcommandFirst = usageName, subcommandFirst
-	parsed.FlagsAfterPositionals = flagsAfterPositionals
-	parsed.Aliases = helpAliases(output, usageName, path)
+	usage := helpUsageInfo(output, expectedName, path)
+	parsed.UsageName, parsed.SubcommandFirst = usage.name, usage.subcommandFirst
+	parsed.FlagsAfterPositionals = usage.flagsAfterPositionals
+	parsed.Aliases = helpAliases(output, usage.name, path)
 	// Some root pages (notably npm) show example invocations instead of a
 	// root synopsis. Their explicit command catalog still identifies the root.
-	if helpUsageHeading.MatchString(output) && !matched && (len(path) > 0 || len(parsed.Commands) == 0) {
+	if helpUsageHeading.MatchString(output) && !usage.matched && (len(path) > 0 || len(parsed.Commands) == 0) {
 		return Command{}, fmt.Errorf("help Usage does not describe the requested command unambiguously: %q", strings.Join(append([]string{tool}, path...), " "))
 	}
-	if len(parsed.Flags) == 0 && len(parsed.Commands) == 0 && (!matched || needsDetails) {
+	if len(parsed.Flags) == 0 && len(parsed.Commands) == 0 && (!usage.matched || usage.needsDetails) {
 		return Command{}, fmt.Errorf("could not recognize help usage, flags or commands")
 	}
 	return parsed, nil

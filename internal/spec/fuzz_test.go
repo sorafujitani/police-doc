@@ -26,6 +26,8 @@ func FuzzParseHelp(f *testing.F) {
 		"Usage: acme run [NUMBER] [flags]\n\nAliases:\n  acme r\n\nFlags:\n  -s, --state string  State: {open|closed}\n  -d, --draft\n",
 		"Usage: acme [OPTIONS]\n\nOPTIONS\n     --color[=WHEN]\n         --color=always. Prose\n\nEXAMPLES\n  --not-a-flag FILE\n",
 		"Options:\n  --state {a,b}\n  --state {b,a}\n  --template string  Template (default: {a|b})\n",
+		"Options:\n  -p, --pair LEFT RIGHT\n  --point <X,Y>\n  --template TEXT  Pattern, e.g.: {a|b}\n",
+		"Usage: acme <command>\nCommands:\n  export  Export:\n      csv  Format details:\n  status  Status\n",
 	} {
 		f.Add(help)
 	}

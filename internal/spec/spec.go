@@ -39,9 +39,11 @@ type Command struct {
 }
 
 type Flag struct {
-	Name    string   `json:"name"`
-	Value   string   `json:"value"` // none, required, optional-attached, optional, or unknown.
-	Choices []string `json:"choices,omitempty"`
+	Name  string `json:"name"`
+	Value string `json:"value"` // none, required, optional-attached, optional, or unknown.
+	// ValueCount applies to required flags; zero means one value.
+	ValueCount int      `json:"value_count,omitempty"`
+	Choices    []string `json:"choices,omitempty"`
 }
 
 func (s *Snapshot) Validate() error {
@@ -75,6 +77,9 @@ func validateCommand(c *Command, path string) error {
 	for _, flag := range c.Flags {
 		if flag.Value != "none" && flag.Value != "required" && flag.Value != "optional-attached" && flag.Value != "optional" && flag.Value != "unknown" {
 			return fmt.Errorf("%s: %s has invalid value mode %q", path, flag.Name, flag.Value)
+		}
+		if flag.ValueCount < 0 || (flag.ValueCount != 0 && flag.Value != "required") {
+			return fmt.Errorf("%s: %s has an invalid value count", path, flag.Name)
 		}
 		if !validFlag(flag.Name) || flags[flag.Name] {
 			return fmt.Errorf("%s: invalid or conflicting flag %q", path, flag.Name)

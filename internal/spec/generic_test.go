@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -326,21 +327,7 @@ esac
 }
 
 func TestCollectHelpDiscoveryLimitsAndFailures(t *testing.T) {
-	log := filepath.Join(t.TempDir(), "calls")
-	t.Setenv("POLICEDOC_TEST_CALLS", log)
-	binary := helpExecutable(t, `
-printf '%s\n' "$*" >> "$POLICEDOC_TEST_CALLS"
-case "$*" in
-  -h) printf 'Usage: acme COMMAND\nCommands:\n  branch       A group\n  unavailable  Broken plugin\n  empty        Unsupported help\n  recursive    Repeating help\n' ;;
-  'branch -h') printf 'Usage: acme branch COMMAND\nCommands:\n  leaf  A leaf\n' ;;
-  'branch leaf -h') printf 'Usage: acme branch leaf [OPTIONS]\n  --output FILE  Output file\n' ;;
-  unavailable*) exit 3 ;;
-  empty*) echo 'No supported help format' ;;
-  recursive*) printf 'Usage: acme recursive COMMAND\nCommands:\n  recursive  Repeating help\n' ;;
-  *) exit 11 ;;
-esac
-`)
-	zero, one := 0, 1
+	t.Parallel()
 	for _, tc := range []struct {
 		name         string
 		depth        *int
@@ -349,10 +336,10 @@ esac
 		want         string
 	}{
 		{"unused", nil, 100, 1, nil, ""},
-		{"root-only", &zero, 100, 1, []string{"branch"}, "help depth limit"},
-		{"one-level", &one, 100, 2, []string{"branch", "branch leaf"}, "help depth limit"},
+		{"root-only", new(0), 100, 1, []string{"branch"}, "help depth limit"},
+		{"one-level", new(1), 100, 2, []string{"branch", "branch leaf"}, "help depth limit"},
 		{"call-limit", nil, 2, 2, []string{"branch", "branch leaf"}, "help call limit"},
-		{"failure-reuse", nil, 100, 3, []string{"unavailable", "unavailable"}, "exit status"},
+		{"failure-reuse", nil, 100, 3, []string{"unavailable", "unavailable"}, "help unavailable"},
 		{"unparsed", nil, 100, 3, []string{"empty"}, "could not recognize help"},
 		{"parent-help", nil, 100, 4, []string{"recursive", "recursive recursive"}, "Usage does not describe"},
 		{"unadvertised", nil, 100, 1, []string{"unknown"}, "not advertised"},
@@ -360,10 +347,33 @@ esac
 		{"unsafe-name", nil, 100, 1, []string{"../escape"}, "not advertised"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if err := os.WriteFile(log, nil, 0o600); err != nil {
-				t.Fatal(err)
+			t.Parallel()
+			var calls []string
+			readHelp := func(_ context.Context, binary string, args []string) (string, error) {
+				if binary != "acme" {
+					t.Fatalf("unexpected executable: %q", binary)
+				}
+				request := strings.Join(args, " ")
+				calls = append(calls, request)
+				switch request {
+				case "-h":
+					return "Usage: acme COMMAND\nCommands:\n  branch       A group\n  unavailable  Broken plugin\n  empty        Unsupported help\n  recursive    Repeating help\n", nil
+				case "branch -h":
+					return "Usage: acme branch COMMAND\nCommands:\n  leaf  A leaf\n", nil
+				case "branch leaf -h":
+					return "Usage: acme branch leaf [OPTIONS]\n  --output FILE  Output file\n", nil
+				case "unavailable -h", "unavailable --help":
+					return "", errors.New("help unavailable")
+				case "empty -h", "empty --help":
+					return "No supported help format", nil
+				case "recursive -h", "recursive recursive -h", "recursive recursive --help":
+					return "Usage: acme recursive COMMAND\nCommands:\n  recursive  Repeating help\n", nil
+				default:
+					t.Fatalf("unexpected help request: %q", request)
+					return "", nil
+				}
 			}
-			collector, err := NewHelpCollector(t.Context(), HelpOptions{Binary: binary, Version: "1.0.0", MaxDepth: tc.depth, MaxCommands: tc.limit}, nil)
+			collector, err := newHelpCollector(t.Context(), HelpOptions{Binary: "acme", Version: "1.0.0", MaxDepth: tc.depth, MaxCommands: tc.limit}, nil, readHelp)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -373,9 +383,8 @@ esac
 			if (tc.want == "" && err != nil) || (tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want))) {
 				t.Fatalf("expected %q, got %v", tc.want, err)
 			}
-			calls, err := os.ReadFile(log)
-			if err != nil || strings.Count(string(calls), "\n") != tc.calls {
-				t.Fatalf("unexpected calls: %q %v", calls, err)
+			if len(calls) != tc.calls {
+				t.Fatalf("help requests = %q, want %d calls", calls, tc.calls)
 			}
 			if len(collector.Snapshot.Root.Child("unavailable").Sources) != 0 {
 				t.Fatal("failed or unused command must remain a placeholder")
@@ -396,7 +405,7 @@ esac
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
 	defer cancel()
 	if err := collector.Collect(ctx, []string{"slow"}); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("cancellation must abort, not become a discovery warning: %v", err)
@@ -407,10 +416,9 @@ func TestCollectHelpRejectsInvalidOptionsBeforeExecution(t *testing.T) {
 	marker := filepath.Join(t.TempDir(), "executed")
 	t.Setenv("POLICEDOC_TEST_MARKER", marker)
 	binary := helpExecutable(t, `touch "$POLICEDOC_TEST_MARKER"; exit 1`)
-	negative := -1
 	for _, options := range []HelpOptions{
 		{}, {Binary: binary, Tool: "bad/name"}, {Binary: binary, Version: "latest"},
-		{Binary: binary, MaxDepth: &negative}, {Binary: binary, MaxCommands: -1},
+		{Binary: binary, MaxDepth: new(-1)}, {Binary: binary, MaxCommands: -1},
 	} {
 		if _, err := NewHelpCollector(t.Context(), options, nil); err == nil {
 			t.Errorf("accepted %+v", options)
@@ -422,42 +430,79 @@ func TestCollectHelpRejectsInvalidOptionsBeforeExecution(t *testing.T) {
 }
 
 func TestAutomaticHelpFlagAndCallBudget(t *testing.T) {
-	log := filepath.Join(t.TempDir(), "calls")
-	t.Setenv("POLICEDOC_TEST_CALLS", log)
-	binary := helpExecutable(t, `
-printf '%s\n' "$*" >> "$POLICEDOC_TEST_CALLS"
-case "$*" in
-  --version) echo 1.2.3 ;;
-  --help) printf 'Usage: acme COMMAND\nCommands:\n  next  A subcommand\n' ;;
-  'next --help') printf 'Usage: acme next [OPTIONS]\n  --output FILE  Output file\n' ;;
-  *) printf 'error: unknown flag\n'; exit 2 ;;
-esac
-`)
-	for _, limit := range []int{1, 3, 4} {
-		if err := os.WriteFile(log, nil, 0o600); err != nil {
-			t.Fatal(err)
-		}
-		collector, err := NewHelpCollector(t.Context(), HelpOptions{Binary: binary, MaxCommands: limit}, nil)
-		if err == nil {
-			err = collector.Collect(t.Context(), []string{"next"})
-		}
-		calls, readErr := os.ReadFile(log)
-		if readErr != nil || strings.Count(string(calls), "\n") != limit+1 {
-			t.Fatalf("call budget %d violated: %q %v", limit, calls, readErr)
-		}
-		if limit == 1 {
-			if err == nil || collector != nil {
-				t.Fatal("root fallback exceeded its budget")
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		limit int
+	}{
+		{"root-limit", 1}, {"child-limit", 3}, {"fallback", 4},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var calls []string
+			readHelp := func(_ context.Context, _ string, args []string) (string, error) {
+				request := strings.Join(args, " ")
+				calls = append(calls, request)
+				switch request {
+				case "--help":
+					return "Usage: acme COMMAND\nCommands:\n  next  A subcommand\n", nil
+				case "next --help":
+					return "Usage: acme next [OPTIONS]\n  --output FILE  Output file\n", nil
+				default:
+					return "", errors.New("unsupported help request")
+				}
 			}
-			continue
+			collector, err := newHelpCollector(t.Context(), HelpOptions{Binary: "acme", Version: "1.2.3", MaxCommands: tc.limit}, nil, readHelp)
+			if err == nil {
+				err = collector.Collect(t.Context(), []string{"next"})
+			}
+			wantCalls := []string{"-h", "--help", "next -h", "next --help"}[:tc.limit]
+			if !slices.Equal(calls, wantCalls) {
+				t.Fatalf("help requests = %q, want %q", calls, wantCalls)
+			}
+			if tc.limit == 1 {
+				if err == nil || collector != nil {
+					t.Fatal("root fallback exceeded its budget")
+				}
+				return
+			}
+			child := collector.Snapshot.Root.Child("next")
+			if tc.limit == 3 && (err == nil || len(child.Sources) != 0) {
+				t.Fatal("limited fallback did not leave a warned placeholder")
+			}
+			if tc.limit == 4 && (err != nil || len(child.Flags) != 1 || !strings.HasSuffix(child.Sources[0].Reference, "next --help")) {
+				t.Fatalf("fallback failed: %+v %v", child, err)
+			}
+		})
+	}
+}
+
+func TestCollectHelpCancellationStopsFallback(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	var calls []string
+	readHelp := func(ctx context.Context, _ string, args []string) (string, error) {
+		request := strings.Join(args, " ")
+		calls = append(calls, request)
+		if request == "-h" {
+			return "Usage: acme COMMAND\nCommands:\n  slow  Slow help\n", nil
 		}
-		child := collector.Snapshot.Root.Child("next")
-		if limit == 3 && (err == nil || len(child.Sources) != 0) {
-			t.Fatal("limited fallback did not leave a warned placeholder")
-		}
-		if limit == 4 && (err != nil || len(child.Flags) != 1 || !strings.HasSuffix(child.Sources[0].Reference, "next --help")) {
-			t.Fatalf("fallback failed: %+v %v", child, err)
-		}
+		cancel()
+		return "", ctx.Err()
+	}
+	collector, err := newHelpCollector(ctx, HelpOptions{Binary: "acme", Version: "1.0.0"}, nil, readHelp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := collector.Collect(ctx, []string{"slow"}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancellation must abort collection: %v", err)
+	}
+	if !slices.Equal(calls, []string{"-h", "slow -h"}) {
+		t.Fatalf("canceled collection made fallback requests: %q", calls)
+	}
+	if collector.Revision != 1 || len(collector.Snapshot.Root.Child("slow").Sources) != 0 {
+		t.Fatal("canceled collection changed the snapshot")
 	}
 }
 
@@ -510,12 +555,12 @@ func TestCollectHelpFailures(t *testing.T) {
 		})
 	}
 	binary := helpExecutable(t, "exec sleep 10")
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
 	defer cancel()
 	if _, err := NewHelpCollector(ctx, HelpOptions{Binary: binary}, nil); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("timeout ignored: %v", err)
 	}
-	ctx, cancel = context.WithCancel(context.Background())
+	ctx, cancel = context.WithCancel(t.Context())
 	cancel()
 	if _, err := NewHelpCollector(ctx, HelpOptions{Binary: binary}, nil); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancellation ignored: %v", err)

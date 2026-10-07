@@ -55,7 +55,7 @@ func FuzzOpaqueTails(f *testing.F) {
 			}}
 			want := Example(example, snapshot)
 			want.Diagnostics = slices.DeleteFunc(want.Diagnostics, func(d Diagnostic) bool { return d.Status == "uncheckable" })
-			for _, arg := range strings.Split(tail, "\x00") {
+			for arg := range strings.SplitSeq(tail, "\x00") {
 				example.Words = append(example.Words, extract.Word{Value: arg, Static: true})
 			}
 			got := Example(example, snapshot)

@@ -26,11 +26,12 @@ example.md:3:1
 Coverage: 2 partially checked, 0 uncheckable. Use --verbose for details.
 ```
 
-The second command is missing a search pattern after `-e`. The scan reports an
-error and exits with code `1`. Neither search is executed.
+The second command is missing a search pattern after `-e`.
+The scan reports an error and exits with code `1`.
+Neither search is executed.
 
-**Install the CLIs used in your docs and put them on `PATH`.** policedoc runs
-them for version and help requests, so use only trusted documents and binaries.
+**Install the CLIs used in your docs and put them on `PATH`.**
+policedoc runs them for version and help requests, so use only trusted documents and binaries.
 
 ## Install
 
@@ -41,8 +42,8 @@ brew install sorafujitani/tap/policedoc
 ```
 
 Homebrew packages support Linux and macOS (x86-64 and ARM64).
-If Homebrew requests trust, run `brew trust --formula sorafujitani/tap/policedoc`
-and retry.
+
+If Homebrew requests trust, run `brew trust --formula sorafujitani/tap/policedoc` and retry.
 
 ### Go
 
@@ -50,8 +51,8 @@ and retry.
 go install github.com/sorafujitani/police-doc/cmd/policedoc@latest
 ```
 
-Requires Go 1.27.1 or later. Add `$(go env GOPATH)/bin` to `PATH`, or use your
-custom `GOBIN` directory.
+Requires Go 1.27.1 or later.
+Add `$(go env GOPATH)/bin` to `PATH`, or use your custom `GOBIN` directory.
 
 ### Nix
 
@@ -98,15 +99,16 @@ policedoc scan docs/ --format json
 | `--refresh` | Recollect help after plugin or environment changes |
 | `--cache-dir PATH` | Cache location; default: `.policedoc/cache` |
 
-Help is cached automatically and updated when the CLI's version or executable
-metadata changes. Use `policedoc --help` for command help.
+Help is cached automatically and updated when the CLI's version or executable metadata changes.
+
+Use `policedoc --help` for command help.
 
 ## What gets checked
 
-Commands in `sh`, `bash`, and `console` code blocks are supported, including
-multiline commands, pipes, `&&`, and `||`. In transcripts marked with `$ `
-prompts, command output is ignored. Directory scans skip `.git`, `node_modules`,
-`vendor`, and symbolic links.
+Commands in `sh`, `bash`, and `console` code blocks are supported, including multiline commands, pipes, `&&`, and `||`.
+In transcripts marked with `$ ` prompts, command output is ignored.
+
+Directory scans skip `.git`, `node_modules`, `vendor`, and symbolic links.
 
 | Finding | Meaning |
 | --- | --- |
@@ -116,14 +118,16 @@ prompts, command output is ignored. Directory scans skip `.git`, `node_modules`,
 
 A review warning is a reason to inspect the example, not proof that it is wrong.
 
-**Help alone cannot prove a command works.** Runtime behavior, variable
-expansions, arguments after `--`, required flags, and positional argument limits
-are not checked. Shell builtins such as `cd` and `echo` are skipped.
+**Help alone cannot prove a command works.**
+Runtime behavior, variable expansions, arguments after `--`, required flags, and positional argument limits are not checked.
+Shell builtins such as `cd` and `echo` are skipped.
 
 ### Reading results
 
-Findings include the file, line, and command. **Coverage** tells you how many
-examples were partly checked or could not be checked. Use `--verbose` to see gaps.
+Findings include the file, line, and command.
+
+**Coverage** tells you how many examples were partly checked or could not be checked.
+Use `--verbose` to see gaps.
 
 | Exit code | Meaning |
 | --- | --- |
@@ -142,4 +146,5 @@ go build ./cmd/policedoc
 ```
 
 See the [release guide](docs/releasing.md) for packaging and publishing.
+
 Licensed under [MIT](LICENSE).

@@ -69,7 +69,7 @@ esac
 		if mode == "cached" && string(calls) != "--version\n" {
 			t.Fatalf("cached aliases caused help requests: %q", calls)
 		}
-		for _, call := range strings.Split(strings.TrimSpace(string(calls)), "\n") {
+		for call := range strings.SplitSeq(strings.TrimSpace(string(calls)), "\n") {
 			if !slices.Contains([]string{"--version", "-h", "pr -h", "pr list -h", "pr view -h", "search -h"}, call) {
 				t.Fatalf("unsafe/unnecessary help request: %q", call)
 			}

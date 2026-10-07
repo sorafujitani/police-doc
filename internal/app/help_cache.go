@@ -14,7 +14,7 @@ import (
 )
 
 // Bump when the cache layout or collector's interpretation changes.
-const helpCacheVersion = 10
+const helpCacheVersion = 11
 
 type cachedHelp struct {
 	SchemaVersion int            `json:"schema_version"`

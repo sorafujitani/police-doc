@@ -1,6 +1,7 @@
 package spec
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"path/filepath"
@@ -75,6 +76,8 @@ func isGo(binary string) bool {
 	return strings.TrimSuffix(filepath.Base(binary), ".exe") == "go"
 }
 
+type helpReader func(context.Context, string, []string) (string, error)
+
 // HelpCollector fills only requested, advertised paths. Its budget and failed
 // attempts last for one scan; only successful help is stored in the snapshot.
 type HelpCollector struct {
@@ -85,15 +88,18 @@ type HelpCollector struct {
 	calls      int
 	aliasCalls int
 	attempts   map[string]error
+	readHelp   helpReader
 }
 
 func NewHelpCollector(ctx context.Context, options HelpOptions, snapshot *Snapshot) (*HelpCollector, error) {
+	return newHelpCollector(ctx, options, snapshot, helpOutput)
+}
+
+func newHelpCollector(ctx context.Context, options HelpOptions, snapshot *Snapshot, readHelp helpReader) (*HelpCollector, error) {
 	if options.Binary == "" {
 		return nil, fmt.Errorf("help collection requires an executable")
 	}
-	if options.Tool == "" {
-		options.Tool = strings.TrimSuffix(filepath.Base(options.Binary), ".exe")
-	}
+	options.Tool = cmp.Or(options.Tool, strings.TrimSuffix(filepath.Base(options.Binary), ".exe"))
 	if !helpCommandName.MatchString(options.Tool) {
 		return nil, fmt.Errorf("invalid tool name")
 	}
@@ -101,9 +107,7 @@ func NewHelpCollector(ctx context.Context, options HelpOptions, snapshot *Snapsh
 	if options.MaxDepth != nil {
 		depth = *options.MaxDepth
 	}
-	if options.MaxCommands == 0 {
-		options.MaxCommands = DefaultHelpCommands
-	}
+	options.MaxCommands = cmp.Or(options.MaxCommands, DefaultHelpCommands)
 	if depth < 0 || options.MaxCommands < 1 {
 		return nil, fmt.Errorf("help depth must be nonnegative and call limit must be positive")
 	}
@@ -124,7 +128,7 @@ func NewHelpCollector(ctx context.Context, options HelpOptions, snapshot *Snapsh
 	if snapshot.Tool != options.Tool || snapshot.OS != runtime.GOOS || (options.Version != "" && snapshot.Version != options.Version) {
 		return nil, fmt.Errorf("help snapshot does not match the requested executable")
 	}
-	collector := &HelpCollector{Snapshot: snapshot, options: options, depth: depth, attempts: make(map[string]error)}
+	collector := &HelpCollector{Snapshot: snapshot, options: options, depth: depth, attempts: make(map[string]error), readHelp: readHelp}
 	if err := collector.Collect(ctx, nil); err != nil {
 		return nil, err
 	}
@@ -170,7 +174,7 @@ func (c *HelpCollector) collect(ctx context.Context, path []string, calls *int) 
 			return fmt.Errorf("help call limit %d reached for %s", c.options.MaxCommands, key)
 		}
 		*calls++
-		output, callErr := helpOutput(ctx, c.options.Binary, args)
+		output, callErr := c.readHelp(ctx, c.options.Binary, args)
 		if callErr != nil {
 			err = callErr
 			if ctx.Err() != nil {
@@ -178,10 +182,7 @@ func (c *HelpCollector) collect(ctx context.Context, path []string, calls *int) 
 			}
 			continue
 		}
-		helpName := c.Snapshot.Root.UsageName
-		if helpName == "" {
-			helpName = c.options.Tool
-		}
+		helpName := cmp.Or(c.Snapshot.Root.UsageName, c.options.Tool)
 		parsed, parseErr := parseHelpPage(output, c.options.Binary, helpName, path)
 		reference := strings.Join(append([]string{c.options.Binary}, args...), " ")
 		if parseErr != nil {
@@ -209,12 +210,19 @@ func helpChild(command *Command, name string) *Command {
 	return &command.Commands[len(command.Commands)-1]
 }
 
+type usageInfo struct {
+	matched, needsDetails                  bool
+	name                                   string
+	subcommandFirst, flagsAfterPositionals bool
+}
+
 // Usage alone is valid evidence for a command without flags or subcommands.
 // Require the requested path so banners, empty headings and unrelated help
 // do not turn a failed request into a successfully collected command.
-func helpUsageInfo(output, tool string, path []string) (matched, needsDetails bool, usageName string, subcommandFirst, flagsAfterPositionals bool) {
-	simple := false
-	subcommandFirst, flagsAfterPositionals = true, true
+func helpUsageInfo(output, tool string, path []string) usageInfo {
+	matched, simple := false, false
+	usageName := ""
+	subcommandFirst, flagsAfterPositionals := true, true
 	for _, words := range helpSynopses(output) {
 		if len(words) < len(path)+1 {
 			continue
@@ -248,7 +256,10 @@ func helpUsageInfo(output, tool string, path []string) (matched, needsDetails bo
 		}
 		simple = simple || !details
 	}
-	return matched, matched && !simple, usageName, matched && subcommandFirst, matched && flagsAfterPositionals
+	return usageInfo{
+		matched: matched, needsDetails: matched && !simple, name: usageName,
+		subcommandFirst: matched && subcommandFirst, flagsAfterPositionals: matched && flagsAfterPositionals,
+	}
 }
 
 // Only an explicit command placeholder before any positional argument supports
@@ -291,18 +302,21 @@ func parseHelp(output string) Command {
 	flags := make(map[string]int)
 	conflicts := make(map[string]bool)
 	choiceConflicts := make(map[string]bool)
-	addFlag := func(name, value string, choices []string) {
+	addFlag := func(name, value string, count int, choices []string) {
 		if index, ok := flags[name]; ok {
 			previous := &command.Flags[index]
 			// Explicit value markers take precedence over a repeated bare heading.
 			if !conflicts[name] && value != "unknown" && (value != "none" || previous.Value == "unknown") {
-				if previous.Value != "unknown" && previous.Value != "none" && previous.Value != value {
-					previous.Value, conflicts[name] = "unknown", true
+				if previous.Value != "unknown" && previous.Value != "none" && (previous.Value != value || previous.ValueCount != count) {
+					previous.Value, previous.ValueCount, conflicts[name] = "unknown", 0, true
+					previous.Choices, choiceConflicts[name] = nil, true
 				} else {
-					previous.Value = value
+					previous.Value, previous.ValueCount = value, count
 				}
 			}
-			if !choiceConflicts[name] && len(choices) > 0 {
+			if previous.ValueCount > 1 {
+				previous.Choices = nil
+			} else if !choiceConflicts[name] && len(choices) > 0 {
 				// Reordering the same choices is not a conflicting definition.
 				if len(previous.Choices) > 0 && !sameChoices(previous.Choices, choices) {
 					previous.Choices, choiceConflicts[name] = nil, true
@@ -313,7 +327,7 @@ func parseHelp(output string) Command {
 			return
 		}
 		flags[name] = len(command.Flags)
-		command.Flags = append(command.Flags, Flag{Name: name, Value: value, Choices: choices})
+		command.Flags = append(command.Flags, Flag{Name: name, Value: value, ValueCount: count, Choices: choices})
 	}
 	commands, usage := false, false
 	commandIndent := -1
@@ -328,11 +342,19 @@ func parseHelp(output string) Command {
 			continue
 		}
 		indent := len(line) - len(strings.TrimLeft(line, " "))
+		if commands && commandIndent >= 0 && indent > commandIndent {
+			continue // Nested descriptions cannot end the command catalog.
+		}
 		if commands && (commandIndent < 0 || indent == commandIndent) {
 			if label := helpCommandLabel.FindStringSubmatch(line); label != nil {
 				commandIndent = indent
 				helpChild(&command, label[1])
 				continue
+			}
+			if row := helpCommandRow.FindStringSubmatch(line); row != nil {
+				commandIndent = indent
+				helpChild(&command, strings.TrimSuffix(row[1], ":"))
+				continue // A description ending in ':' is not a section heading.
 			}
 		}
 		commandHeading := helpCommandHeading.MatchString(trimmed)
@@ -393,6 +415,7 @@ func parseHelp(output string) Command {
 			matches = append(matches, match)
 		}
 		values := make([]string, len(matches))
+		counts := make([]int, len(matches))
 		choices := make([][]string, len(matches))
 		aliasesOnly := true
 		for i := 1; i < len(matches); i++ {
@@ -407,12 +430,15 @@ func parseHelp(output string) Command {
 				end = matches[i+1][0]
 			}
 			tail := signature[match[1]:end]
-			values[i] = helpValue(tail)
-			choices[i] = helpFlagChoices(tail, description)
+			values[i], counts[i] = helpValueArity(tail)
+			if counts[i] == 0 {
+				// Multiple slots may have different choices; do not apply one set to all.
+				choices[i] = helpFlagChoices(signature[match[0]:match[1]], tail, description)
+			}
 		}
 		for i := len(matches) - 2; i >= 0; i-- {
 			if helpAliasGap.MatchString(signature[matches[i][1]:matches[i+1][0]]) {
-				values[i], choices[i] = values[i+1], choices[i+1]
+				values[i], counts[i], choices[i] = values[i+1], counts[i+1], choices[i+1]
 				short := strings.TrimSuffix(signature[matches[i][0]:matches[i][1]], "...")
 				long := signature[matches[i+1][0]:matches[i+1][1]]
 				if len(short) == 2 && strings.HasPrefix(long, "--") {
@@ -423,10 +449,10 @@ func parseHelp(output string) Command {
 		for i, match := range matches {
 			name := strings.TrimSuffix(signature[match[0]:match[1]], "...")
 			if strings.Contains(name, "[no-]") {
-				addFlag(strings.Replace(name, "[no-]", "", 1), values[i], choices[i])
-				addFlag(strings.Replace(name, "[no-]", "no-", 1), "unknown", nil)
+				addFlag(strings.Replace(name, "[no-]", "", 1), values[i], counts[i], choices[i])
+				addFlag(strings.Replace(name, "[no-]", "no-", 1), "unknown", 0, nil)
 			} else {
-				addFlag(name, values[i], choices[i])
+				addFlag(name, values[i], counts[i], choices[i])
 			}
 		}
 	}

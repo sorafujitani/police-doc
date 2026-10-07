@@ -41,7 +41,7 @@ func helpAliases(output, program string, path []string) []string {
 		} else {
 			words = nil
 			valid := true
-			for _, part := range strings.Split(trimmed, ",") {
+			for part := range strings.SplitSeq(trimmed, ",") {
 				name := strings.TrimSpace(part)
 				if name == "" {
 					continue

@@ -10,11 +10,14 @@ func (example Example) CLI() string {
 	if example.Reason != "" || len(example.Words) == 0 || !example.Words[0].Static {
 		return ""
 	}
-	return path.Base(strings.ReplaceAll(example.Words[0].Value, "\\", "/"))
+	return path.Base(example.Words[0].Value)
 }
 
 // unwrap only interprets known wrapper syntax; it never invokes a wrapper.
 func unwrap(example Example) Example {
+	if example.Reason != "" {
+		return example
+	}
 	if len(example.Words) > 0 && example.Words[0].Static && shellBuiltin(example.Words[0].Value) {
 		example.Code, example.Reason = "shell-builtin", "Shell builtins are not checked against external CLI help."
 		return example
@@ -67,6 +70,10 @@ func unwrap(example Example) Example {
 		}
 		if index >= len(example.Words) || !example.Words[index].Static || strings.HasPrefix(example.Words[index].Value, "-") {
 			example.Code, example.Reason = "unsupported-wrapper", "The wrapped executable is missing or dynamic; the wrapper was not executed."
+			return example
+		}
+		if wrapper == "sudo" && strings.Contains(example.Words[index].Value, "=") {
+			example.Code, example.Reason = "unsupported-environment", "sudo environment assignments were not applied; the wrapped executable and its arguments were not checked."
 			return example
 		}
 		if wrapper == "npx" {

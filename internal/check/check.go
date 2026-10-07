@@ -19,7 +19,7 @@ func Example(example extract.Example, snapshot *spec.Snapshot) Result {
 	}
 	if example.Reason != "" {
 		severity := "info"
-		if example.Code == "invalid-shell" {
+		if example.Code == "invalid-shell" || example.Code == "unsupported-environment" {
 			severity = "warning"
 		}
 		add(severity, "uncheckable", example.Code, example.Reason, nil)
@@ -68,18 +68,31 @@ scan:
 					add("warning", "needs-review", "unverified-flag", fmt.Sprintf("%s is absent from the collected help; this does not prove it is invalid or removed.", name), sources())
 					break scan
 				}
+				var values []string
+				if attached {
+					values = append(values, value)
+				}
 				switch flag.Value {
 				case "required":
-					if !attached {
+					count := max(1, flag.ValueCount)
+					if attached && count > 1 {
+						add("warning", "uncheckable", "unknown-flag-arity", fmt.Sprintf("%s documents %d separate values, but attached-value grouping is unknown; the remaining arguments were not checked.", name, count), sources())
+						break scan
+					}
+					for len(values) < count {
 						if i+1 == len(example.Words) {
-							add("error", "confirmed", "missing-flag-value", name+" requires a value.", sources())
+							message := name + " requires a value."
+							if count > 1 {
+								message = fmt.Sprintf("%s requires %d values; only %d were provided.", name, count, len(values))
+							}
+							add("error", "confirmed", "missing-flag-value", message, sources())
 							break scan
 						} else if !example.Words[i+1].Static {
 							add("info", "uncheckable", "dynamic-argument", "The flag value and following arguments are dynamic; they were not expanded or checked.", sources())
 							break scan
 						}
 						i++ // Even a dash-prefixed token can be a flag's value.
-						value, attached = example.Words[i].Value, true
+						values = append(values, example.Words[i].Value)
 					}
 				case "optional", "unknown":
 					if !attached {
@@ -89,8 +102,10 @@ scan:
 						break scan
 					}
 				}
-				if attached && len(flag.Choices) > 0 && !slices.Contains(flag.Choices, value) {
-					add("warning", "needs-review", "unverified-flag-value", fmt.Sprintf("%q is not among the documented choices for %s: %s.", value, name, strings.Join(flag.Choices, ", ")), sources())
+				for _, value := range values {
+					if len(flag.Choices) > 0 && !slices.Contains(flag.Choices, value) {
+						add("warning", "needs-review", "unverified-flag-value", fmt.Sprintf("%q is not among the documented choices for %s: %s.", value, name, strings.Join(flag.Choices, ", ")), sources())
+					}
 				}
 			}
 			continue

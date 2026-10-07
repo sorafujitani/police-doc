@@ -136,6 +136,11 @@ func Markdown(path string, source []byte) []Example {
 				value, static := literal(arg.Parts, false)
 				example.Words = append(example.Words, Word{Value: value, Static: static})
 			}
+			for _, assignment := range call.Assigns {
+				if assignment.Name != nil && assignment.Name.Value == "PATH" {
+					example.Code, example.Reason = "unsupported-environment", "The example changes PATH; it was not applied, so the executable and its arguments were not checked."
+				}
+			}
 			examples = append(examples, unwrap(example))
 			return false // Do not treat nested substitutions as independent examples.
 		})

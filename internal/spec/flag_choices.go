@@ -7,20 +7,32 @@ import (
 
 var (
 	helpChoiceSet       = regexp.MustCompile(`([{<])([A-Za-z0-9_.:/+-]+(?:[ \t]*[|,][ \t]*[A-Za-z0-9_.:/+-]+)+)([}>])`)
-	helpExplicitChoices = regexp.MustCompile(`\b(?:choices|(?:allowed|possible|accepted) values|one of)\b`)
+	helpExplicitChoices = regexp.MustCompile(`^(?:choices|(?:allowed|possible|accepted|valid|supported) values|(?:must be )?one of)(?: \(default [^():]+\))?$`)
 )
 
-// Accept explicit enumerations in a value signature or after a description's
-// colon, not arbitrary words/examples in prose. Mismatches remain review findings.
-func helpFlagChoices(signature, description string) []string {
+// Require an enumeration in a signature or a labeled value constraint, not an
+// arbitrary colon in prose. Angle-bracket tuples and metavariables are not enums.
+func helpFlagChoices(name, signature, description string) []string {
+	// Later usage items may belong to positionals, not this flag.
+	items := helpUsageItems(strings.Fields(strings.TrimPrefix(signature, "=")))
+	if len(items) > 0 {
+		signature = items[0]
+	}
 	match := helpChoiceSet.FindStringSubmatch(signature)
+	explicit := false
 	if match == nil {
-		if colon := strings.Index(description, ":"); colon >= 0 {
-			label := strings.ToLower(strings.TrimSpace(description[:colon]))
-			if strings.Contains(label, "example") || (strings.Contains(label, "default") && !helpExplicitChoices.MatchString(label)) {
+		if label, text, found := strings.Cut(description, ":"); found {
+			label = strings.ToLower(strings.TrimSpace(label))
+			explicit = helpExplicitChoices.MatchString(label)
+			if strings.Contains(label, "example") || (strings.Contains(label, "default") && !explicit) {
 				return nil // Examples and defaults do not restrict allowed values.
 			}
-			text := strings.TrimSpace(description[colon+1:])
+			field := strings.TrimLeft(strings.ReplaceAll(name, "[no-]", ""), "-")
+			field = strings.ToLower(strings.NewReplacer("-", " ", "_", " ").Replace(field))
+			if !explicit && strings.TrimPrefix(label, "filter by ") != field {
+				return nil
+			}
+			text = strings.TrimSpace(text)
 			if strings.HasPrefix(text, "{") || strings.HasPrefix(text, "<") {
 				match = helpChoiceSet.FindStringSubmatch(text)
 			}
@@ -33,6 +45,9 @@ func helpFlagChoices(signature, description string) []string {
 	seen := make(map[string]bool)
 	for _, choice := range strings.FieldsFunc(match[2], func(r rune) bool { return r == '|' || r == ',' }) {
 		choice = strings.TrimSpace(choice)
+		if match[1] == "<" && !explicit && (strings.Contains(match[2], ",") || helpMetavar.MatchString(choice)) {
+			return nil
+		}
 		if !seen[choice] {
 			choices = append(choices, choice)
 			seen[choice] = true
