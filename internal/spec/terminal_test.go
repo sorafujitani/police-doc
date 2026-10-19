@@ -89,7 +89,7 @@ esac
 		t.Fatalf("control payload leaked into metadata: %+v", snapshot)
 	}
 	command := snapshot.Root.Child("run")
-	if command == nil || command.Flag("-s") == nil || command.Flag("--symbolic") == nil || len(command.Flags) != 3 {
+	if command == nil || command.Flag("-s") == nil || command.Flag("--symbolic") == nil || len(command.Flags) != 2 {
 		t.Fatalf("linked flags were not collected: %+v", command)
 	}
 	if flag := command.Flag("--output"); flag == nil || flag.Value != "required" {

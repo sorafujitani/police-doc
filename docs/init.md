@@ -1,81 +1,84 @@
 # Checking specification
 
-policedoc checks CLI examples in Markdown against help from installed executables.
-No configuration or manually maintained JSON specification is required.
-It does not execute document commands and only checks what the collected help supports.
+policedoc checks Markdown CLI examples against installed help or explicitly supplied reference rules.
+It never executes document commands, wrappers, substitutions, or package installations.
 
-## Input and collection
+## Inputs and metadata
 
 Input is a Markdown file or directory.
-Shell fences labeled `sh`, `bash`, and `console` are supported.
-A first nonempty, non-comment line starting with `$ ` marks a terminal transcript in any of these fences.
-Only prompted commands and their continuation lines are extracted; terminal output is ignored.
-Known POSIX and Bash builtins receive an uncheckable INFO notice without external help collection.
-Continuation lines, pipes, `&&`, and `||` are parsed while preserving source locations.
+Shell fences labeled `sh`, `bash`, `shell`, and `console` are supported.
+A leading `$ ` or `❯ ` can also identify a transcript in an unlabeled fence.
+Pipes, continuation lines, `&&`, and `||` preserve each command's source location.
+Ambiguous terminal output and unsupported shell constructs remain checking gaps.
+Bash builtins use shell-qualified references or Bash’s own builtin help, with startup files and imported functions disabled.
+Compound bodies are inspected statically. Document functions and aliases do not select unrelated installed executables.
 
-The scanner locates executables used by the examples and collects their versions and help.
-It collects root help, then follows only advertised subcommands needed by the examples.
-The same argument traversal drives collection and checking, so flag values, positional
-arguments, dynamic words and forwarded tails cannot become help requests.
-Each scan allows a depth of three and at most 100 help calls per executable.
-Each call is limited to ten seconds and 1 MiB of combined stdout and stderr.
-Unused commands consume no calls and cause no warnings.
-For Homebrew, `brew commands --quiet` and `brew help <command>` provide the command list and help.
-Go uses `version`, `help` and `help <command>`, with automatic toolchain downloads disabled.
-Usage-only help can describe an advertised command without flags or subcommands.
-A child's help must describe that child; parent help is not child evidence.
-
-Supported static `sudo` and `npx` forms resolve to the inner CLI.
-Wrappers are not executed and packages are not installed.
-
-## Caching
-
-Successful help is cached automatically and extended as new commands are needed.
-Cache identity includes the selected executable, not the document's directory.
-Different `npx` origins share help only when they resolve to the same executable.
-Failures are reused only within the current scan and retried on the next scan.
-Help is recollected when the executable's version or metadata changes.
-Use `--refresh` after changes such as plugin updates.
-Every run checks the document examples again.
-
-The installed CLI's version is checked even when reusing cached help.
-A missing executable produces a warning and uncheckable results, even if cached help exists.
-Outdated cache formats and corrupt entries are recollected.
-
-## Checks and limits
-
-| Situation | Result |
+| Source | Selection and limits |
 | --- | --- |
-| A flag explicitly requiring a value has none | Confirmed error |
-| A flag is absent from help | Review warning |
-| The CLI's help cannot be collected | Warning and uncheckable results |
-| A subcommand's detailed help is unavailable or exceeds a collection limit | Warning and uncheckable results only for examples that need it |
+| Installed help | Default; discovers trusted executables and their versions, then collects root and advertised child help |
+| `--spec` | Uses selected target versions from reference files; does not start executables |
+| `--spec --allow-live-help` | Uses references first; permits collection only for CLIs absent from them |
+| `--export-spec` | Writes available rules as a portable starting point; does not infer missing grammar |
 
-Help is not a complete specification.
-Hidden flags, required flags, and positional argument bounds are not inferred.
-Neither are deprecation, removal, or replacements.
-The scanner does not verify runtime results, side effects, or whether a CLI is the latest version.
+References never silently merge with a different installed version.
+Duplicate target selections and invalid reference rules are operational errors.
+The [reference format](references.md) defines its bounds and provenance requirements.
 
-Only the statically interpretable prefix is checked.
-Unknown flag arity, positional arguments, `--`, and dynamic words stop further argument checking.
-This avoids mistaking arguments forwarded to another program for the launcher's flags.
-Short flag groups, aliases, and inherited flags are not guessed.
+Live collection uses only version/help protocols and advertised command paths, not document flag values or operands.
+Explicit argv forwarding may select a child executable for its own metadata requests, under the same source policy.
+Supported `sudo` and `npx` prefixes are resolved without running wrappers.
+For local `npx` packages, executable lookup checks ancestor `node_modules/.bin` directories before `PATH`.
 
-## Results and safety
+Help requests have bounded depth, count, duration, and output size; see [collection details](checking.md#collection-and-caching).
+Only commands reached by examples need detailed help.
+Failures do not imply that a CLI example is invalid.
 
-Text reports show errors and warnings grouped by source command, with source locations and a coverage summary.
-`--verbose` adds INFO messages, target CLI versions, diagnostic certainty, and collection details.
-INFO describes incomplete checking, not a successful validation.
-Coverage distinguishes partial checks from uncheckable examples; full validation is never claimed.
-JSON always includes all diagnostics and collection details, using schema version `2`.
+## Cache behavior
 
-Exit codes are `0` below the failure threshold, `1` at or above it, and `2` for operational failures.
-The default threshold is error.
-Use `--fail-on warning` to fail on warnings too.
-`--fail-on none` disables only finding-based failures.
-Exit code `0` does not imply that all arguments were checked.
+Successful live help is cached by executable identity, version, and executable metadata.
+New command paths extend the cache; changed executables or invalid caches trigger recollection.
+Failures are retried on later scans.
+`--refresh` forces collection after plugin or environment changes.
+An installed executable is still required for this cache; portable references are a separate input format.
 
-Normal scans start executables to obtain version and help information.
-Use only trusted documents and executables.
-Help collection is not a sandbox and cannot guarantee freedom from side effects.
-See the [README](../README.md) for usage.
+## Checking scope
+
+Help can establish required option values and suggest suspicious flags or commands.
+Its omissions do not prove that an option was removed or is invalid.
+Unambiguous help synopses also supply positional counts and documented modes.
+Unknown ordering, mixed flag/operand dependencies, and ambiguous alternatives stay incomplete.
+A mismatch with inferred usage remains a review finding, not proof of invalid CLI syntax.
+
+Reference rules can additionally establish positional counts, flag requirements and exclusions,
+option ordering, and explicitly declared argv forwarding.
+An incomplete reference still leaves gaps.
+Unresolved expansions and nested commands are not treated as successful validation.
+
+`checked` means the declared argument rules were applied without an unresolved portion.
+It is not a statement about runtime effects, resource existence, embedded-language semantics,
+or the accuracy and completeness of a supplied contract.
+A checked example may contain confirmed violations of that contract.
+
+## Reports and exit codes
+
+JSON report schema `3` includes target versions and OS values, source evidence,
+checked/partial/uncheckable counts, and `coverage_complete`.
+Each incomplete result includes `requirements` for missing specifications, grammar, inputs, or document context.
+Requirements do not count as successful checks or suppress findings.
+A scan with no extracted examples is not complete.
+Text reports show errors, warnings, and coverage. `--verbose` adds all gaps and evidence.
+`--require-complete` also makes gaps visible without verbose output.
+
+| Exit code | Meaning |
+| --- | --- |
+| `0` | No finding reaches the selected threshold, and any requested coverage requirement is satisfied |
+| `1` | Findings reach the threshold, or `--require-complete` rejects incomplete coverage |
+| `2` | Operational failure |
+
+The default finding threshold is `error`.
+`--fail-on warning` also fails on warnings; `--fail-on none` disables only finding-based failures.
+It cannot bypass `--require-complete`.
+
+Live help is not a sandbox and may have side effects inside the selected executable.
+Use trusted documents and binaries, or reference-only mode.
+Documents are not rewritten.

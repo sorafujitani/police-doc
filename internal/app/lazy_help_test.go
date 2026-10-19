@@ -71,7 +71,7 @@ func TestHelpFollowsOnlyCheckableDocumentPaths(t *testing.T) {
 		"acme \"$DYNAMIC\" unused3",
 	}, "\n")+"\n```\n")
 	report := scanReport(t, doc)
-	if report.Summary.Errors != 1 || report.Summary.Warnings != 1 || report.Summary.Uncheckable != 0 {
+	if report.Summary.Errors != 1 || report.Summary.Warnings != 2 || report.Summary.Uncheckable != 0 {
 		t.Fatalf("unexpected findings: %+v", report)
 	}
 	if report.Results[2].Diagnostics[0].Code != "unknown-flag-arity" {
@@ -133,7 +133,7 @@ func TestWrongHelpCannotValidateCommandFlags(t *testing.T) {
 			doc, log := lazyHelpFixture(t)
 			put(t, doc, "```sh\nacme "+name+" --output\nacme export --output file\n```\n")
 			report := scanReport(t, doc)
-			if report.Summary.Errors != 0 || report.Summary.Warnings != 1 || report.Results[0].Coverage != "uncheckable" || report.Results[1].Coverage != "partial" {
+			if report.Summary.Errors != 0 || report.Summary.Warnings != 1 || report.Results[0].Coverage != "uncheckable" || report.Results[1].Coverage != "checked" {
 				t.Fatalf("unrelated help was treated as command evidence: %+v", report)
 			}
 			assertHelpCalls(t, log, "--version\n-h\n"+name+" -h\n"+name+" --help\nexport -h\n")

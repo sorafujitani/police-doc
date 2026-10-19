@@ -16,6 +16,7 @@ import (
 
 	"github.com/sorafujitani/police-doc/internal/check"
 	"github.com/sorafujitani/police-doc/internal/extract"
+	"github.com/sorafujitani/police-doc/internal/spec"
 )
 
 const usage = `policedoc — check Markdown CLI examples against installed CLI help
@@ -23,12 +24,17 @@ const usage = `policedoc — check Markdown CLI examples against installed CLI h
 Usage:
   policedoc scan <file.md|directory>...
                 [--refresh] [--cache-dir directory]
+                [--spec file-or-directory]... [--allow-live-help] [--require-complete]
+                [--export-spec file.json]
                 [--format text|json] [--verbose] [--fail-on error|warning|none]
   policedoc version
 
 scan never executes document commands. It starts trusted executables for version
 and help requests, caching the results for new or changed CLIs.
 sudo/npx are never executed; packages are never installed.
+--spec uses reference rules only; no CLI is started unless --allow-live-help
+explicitly permits help collection for CLIs missing from the references.
+--require-complete fails unless every example has a complete static check.
 Help is incomplete: unknown flags need review, not automatic rejection.
 Missing values explicitly documented in help are errors.
 Text shows errors and warnings; --verbose adds INFO messages and collection details.
@@ -79,6 +85,17 @@ func scan(ctx context.Context, args []string, stdout, stderr io.Writer) (int, er
 	failOn := flags.String("fail-on", "error", "error, warning, or none")
 	refresh := flags.Bool("refresh", false, "refresh help for all CLIs used in the documents")
 	cacheDir := flags.String("cache-dir", ".policedoc/cache", "directory for automatically collected CLI specifications")
+	requireComplete := flags.Bool("require-complete", false, "fail if any example lacks a complete static check")
+	allowLiveHelp := flags.Bool("allow-live-help", false, "allow metadata collection for CLIs missing from supplied references")
+	exportPath := flags.String("export-spec", "", "write collected/reference specifications as a portable JSON file")
+	var referencePaths []string
+	flags.Func("spec", "reference specification file or directory (repeatable)", func(path string) error {
+		if path == "" {
+			return fmt.Errorf("spec path must not be empty")
+		}
+		referencePaths = append(referencePaths, path)
+		return nil
+	})
 	var usageErr error
 	flags.Usage = func() { _, usageErr = io.WriteString(stdout, usage) }
 	args, err := interspersed(flags, args)
@@ -91,7 +108,14 @@ func scan(ctx context.Context, args []string, stdout, stderr io.Writer) (int, er
 		}
 		return 0, err
 	}
-	collection := collectionOptions{CacheDir: *cacheDir, Refresh: *refresh}
+	references, err := spec.LoadReferences(referencePaths)
+	if err != nil {
+		return 0, err
+	}
+	collection := collectionOptions{CacheDir: *cacheDir, Refresh: *refresh, References: references, ReferenceOnly: len(referencePaths) > 0 && !*allowLiveHelp}
+	if *exportPath != "" && filepath.Ext(*exportPath) != ".json" {
+		return 0, fmt.Errorf("export-spec requires a .json output path")
+	}
 	if *cacheDir == "" {
 		return 0, fmt.Errorf("cache-dir must not be empty")
 	}
@@ -109,6 +133,7 @@ func scan(ctx context.Context, args []string, stdout, stderr io.Writer) (int, er
 		return 0, err
 	}
 	report := check.NewReport(len(files))
+	report.RequireComplete = *requireComplete
 	collected := make(map[string]*collectedHelp)
 	for _, path := range files {
 		if err := ctx.Err(); err != nil {
@@ -137,10 +162,15 @@ func scan(ctx context.Context, args []string, stdout, stderr io.Writer) (int, er
 			report.Add(result)
 		}
 	}
+	if *exportPath != "" {
+		if err := exportReferences(*exportPath, references, collected); err != nil {
+			return 0, err
+		}
+	}
 	if err := report.Write(stdout, *format, *verbose); err != nil {
 		return 0, err
 	}
-	if report.Fails(*failOn) {
+	if report.Fails(*failOn) || (*requireComplete && !report.CoverageComplete) {
 		return 1, nil
 	}
 	return 0, nil

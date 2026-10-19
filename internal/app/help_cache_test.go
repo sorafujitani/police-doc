@@ -128,6 +128,40 @@ func TestIncrementalHelpCache(t *testing.T) {
 	assertHelpCalls(t, log, "alpha --version\nalpha -h\nbeta --version\nbeta -h\n")
 }
 
+func TestVersionlessHelpCache(t *testing.T) {
+	dir, doc, log := cacheFixture(t)
+	binary := filepath.Join(dir, "bin/xattr")
+	fakeCLI(t, binary, `
+printf '%s\n' "$*" >> "$POLICEDOC_TEST_CALLS"
+case "$*" in
+  --help|-h) printf 'usage: xattr -d attr_name file [file ...]\n\noptions:\n  -h: print this help\n' ;;
+  *) exit 26 ;;
+esac
+`)
+	put(t, doc, "```sh\nxattr -d user.attribute file\n```\n")
+	scan := func() {
+		t.Helper()
+		code, output, stderr := run("scan", doc, "--format=json", "--fail-on=warning")
+		var report check.Report
+		if err := json.Unmarshal([]byte(output), &report); err != nil || code != 0 || stderr != "" || len(report.Results) != 1 || report.Results[0].Version != "unknown" {
+			t.Fatalf("versionless scan failed: %d %s %s %v", code, output, stderr, err)
+		}
+	}
+	scan()
+	assertHelpCalls(t, log, "--help\n-h\n")
+	scan()
+	assertHelpCalls(t, log, "--help\n")
+	contents, err := os.ReadFile(binary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(binary, append(contents, []byte("\n# changed executable\n")...), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	scan()
+	assertHelpCalls(t, log, "--help\n-h\n")
+}
+
 func TestHelpCacheRecovery(t *testing.T) {
 	dir, doc, log := cacheFixture(t)
 	if code, _, stderr := run("scan", doc); code != 0 || stderr != "" {

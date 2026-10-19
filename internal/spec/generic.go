@@ -50,6 +50,14 @@ func DetectVersion(ctx context.Context, binary string) (string, Evidence, error)
 	if isGo(binary) {
 		output, err = goOutput(ctx, binary, "version")
 		reference = binary + " version"
+	} else if filepath.Base(binary) == "xattr" {
+		// macOS xattr has no version query. Keep this explicit instead of
+		// treating arbitrary version failures as successful collection.
+		output, err = commandOutput(ctx, binary, helpEnvironment, true, "--help")
+		if err == nil {
+			_, err = parseHelpPage(output, binary, "xattr", nil)
+		}
+		return "unknown", Evidence{Kind: "help", Reference: binary + " --help", Detail: "xattr does not report a version; cached help is tied to executable metadata."}, err
 	} else {
 		output, err = commandOutput(ctx, binary, helpEnvironment, false, "--version")
 	}
@@ -65,7 +73,33 @@ func DetectVersion(ctx context.Context, binary string) (string, Evidence, error)
 		}
 		versionLine = strings.TrimPrefix(fields[2], "go")
 	}
+	switch filepath.Base(binary) {
+	case "bash":
+		if version, ok := strings.CutPrefix(versionLine, "GNU bash, version "); ok {
+			versionLine, _, _ = strings.Cut(version, " ")
+		}
+	case "tar", "bsdtar":
+		if strings.HasPrefix(versionLine, "bsdtar ") {
+			versionLine, _, _ = strings.Cut(versionLine, " - ")
+		}
+	case "nix", "nix-shell", "nix-env", "nix-build":
+		if strings.HasPrefix(versionLine, filepath.Base(binary)+" (") {
+			if _, version, ok := strings.Cut(versionLine, ") "); ok {
+				versionLine = version
+			}
+		}
+	}
+	// A leading "tool VERSION" identifies the CLI independently of library,
+	// platform, or interpreter versions later on the same line.
+	fields := strings.Fields(versionLine)
+	if len(fields) > 1 && fields[0] == strings.TrimSuffix(filepath.Base(binary), ".exe") && helpVersion.FindString(fields[1]) == fields[1] {
+		versionLine = fields[1]
+	}
 	versions := helpVersion.FindAllString(versionLine, -1)
+	for i := range versions {
+		versions[i] = strings.TrimPrefix(versions[i], "v")
+	}
+	versions = slices.Compact(versions) // fzf prints the same version twice.
 	if len(versions) != 1 {
 		return "", Evidence{}, fmt.Errorf("could not recognize a single CLI version")
 	}
@@ -168,8 +202,12 @@ func (c *HelpCollector) collect(ctx context.Context, path []string, calls *int) 
 			c.attempts[key] = err
 		}
 	}()
+	var selected *Command
 	for _, args := range helpRequests(c.options.Binary, path) {
 		if *calls >= c.options.MaxCommands {
+			if selected != nil {
+				break // Retain usable short help when the longer request cannot fit.
+			}
 			saveAttempt = false // Exhausting alias discovery must not poison normal collection.
 			return fmt.Errorf("help call limit %d reached for %s", c.options.MaxCommands, key)
 		}
@@ -194,8 +232,15 @@ func (c *HelpCollector) collect(ctx context.Context, path []string, calls *int) 
 		if err := validateCommand(&parsed, c.Snapshot.Tool+" "+key); err != nil {
 			return err
 		}
-		*target = parsed
-		c.Snapshot.Sources = append(c.Snapshot.Sources, evidence)
+		selected = &parsed
+		if args[len(args)-1] == "-h" && (strings.Contains(output, "see more with '--help'") || strings.Contains(output, "--help for more details")) {
+			continue // Explicitly advertised long help can contain additional modes, not just flags.
+		}
+		break
+	}
+	if selected != nil {
+		*target = *selected
+		c.Snapshot.Sources = append(c.Snapshot.Sources, selected.Sources...)
 		c.Revision++
 		return nil
 	}
@@ -227,7 +272,7 @@ func helpUsageInfo(output, tool string, path []string) usageInfo {
 		if len(words) < len(path)+1 {
 			continue
 		}
-		name := strings.TrimSuffix(filepath.Base(words[0]), ".exe")
+		name := strings.TrimSuffix(strings.TrimSuffix(filepath.Base(words[0]), "[EXE]"), ".exe")
 		if !helpCommandName.MatchString(name) || strings.HasSuffix(name, ":") || (tool != "" && name != tool) {
 			continue
 		}
@@ -302,6 +347,7 @@ func parseHelp(output string) Command {
 	flags := make(map[string]int)
 	conflicts := make(map[string]bool)
 	choiceConflicts := make(map[string]bool)
+	aliasPairs := make(map[string]string)
 	addFlag := func(name, value string, count int, choices []string) {
 		if index, ok := flags[name]; ok {
 			previous := &command.Flags[index]
@@ -436,6 +482,16 @@ func parseHelp(output string) Command {
 				choices[i] = helpFlagChoices(signature[match[0]:match[1]], tail, description)
 			}
 		}
+		if aliasesOnly && len(matches) == 2 {
+			short, long := signature[matches[0][0]:matches[0][1]], signature[matches[1][0]:matches[1][1]]
+			if len(short) == 2 && strings.HasPrefix(long, "--") {
+				if previous, ok := aliasPairs[short]; ok && previous != long {
+					aliasPairs[short] = ""
+				} else if !ok {
+					aliasPairs[short] = long
+				}
+			}
+		}
 		for i := len(matches) - 2; i >= 0; i-- {
 			if helpAliasGap.MatchString(signature[matches[i][1]:matches[i+1][0]]) {
 				values[i], counts[i], choices[i] = values[i+1], counts[i+1], choices[i+1]
@@ -456,7 +512,15 @@ func parseHelp(output string) Command {
 			}
 		}
 	}
+	for short, long := range aliasPairs {
+		a, b := command.Flag(short), command.Flag(long)
+		if a != nil && b != nil && a.Value == b.Value && a.ValueCount == b.ValueCount && slices.Equal(a.Choices, b.Choices) {
+			b.Aliases = append(b.Aliases, short)
+			command.Flags = slices.DeleteFunc(command.Flags, func(flag Flag) bool { return flag.Name == short })
+		}
+	}
 	for _, flag := range command.Flags {
+		slices.Sort(flag.Aliases)
 		if strings.HasPrefix(flag.Name, "-") && !strings.HasPrefix(flag.Name, "--") && len(flag.Name) > 2 {
 			command.ShortFlagClusters = false // Go-style single-dash names do not imply clusters.
 		}

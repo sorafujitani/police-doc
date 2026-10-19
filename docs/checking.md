@@ -5,11 +5,21 @@ For a quick overview, see the [README](../README.md#what-gets-checked).
 
 ## What gets checked
 
-Markdown fences labeled `sh`, `bash`, or `console` are supported.
+Markdown fences labeled `sh`, `bash`, `shell`, or `console` are supported.
 The scanner handles continuation lines, pipes, `&&`, and `||`.
-In any supported fence, a first nonempty, non-comment line starting with `$ ` marks a terminal transcript.
+A first nonempty, non-comment line starting with `$ ` marks a terminal transcript, including in an unlabeled fence.
 Only prompted commands and their continuation lines are checked; terminal output is ignored.
-Known POSIX and Bash builtins, such as `cd`, `echo`, and `source`, receive an INFO notice instead of external help collection.
+Other unlabeled fences are not assumed to contain shell commands.
+A leading `> ` is ambiguous between a prompt and a redirection, so the block remains uncheckable.
+Diagnostic-only console blocks starting with `WARNING:`, `error:`, `fatal:`, or `Usage:` also remain uncheckable instead of becoming executable names.
+Shell examples are parsed as Bash; a `sh` fence does not select Dash, Zsh, or a portable POSIX contract.
+Bash builtins, such as `cd` and `echo`, use Bash’s own version and builtin help.
+The fixed help request disables startup files and imported shell functions.
+A missing shell still needs a reference; an external executable with the same name is not substituted.
+Loop, conditional, subshell, function, and declaration bodies are inspected without executing control flow.
+Document-defined functions and aliases remain distinct from installed executables.
+
+The following rules describe checks based on installed help:
 
 - A flag with an explicit value requirement in help produces an error when a required value is missing. Fixed multiple values, such as `--pair LEFT RIGHT`, are counted separately. Attached-value grouping and per-position choice rules for multi-value flags remain unverified.
 - A flag absent from collected help produces a review warning, not a claim that it is invalid.
@@ -19,7 +29,7 @@ Known POSIX and Bash builtins, such as `cd`, `echo`, and `source`, receive an IN
 - Known subcommand names and documented aliases select their collected help.
 - An unlisted subcommand produces a review warning when usage identifies a command position and help lists available commands. It is not proof that the name is invalid.
 - Flags after positional arguments are checked when usage explicitly documents that order. Positional values and bounds remain unchecked.
-- Ambiguous value rules or positional tails containing unchecked flags produce warnings. Dynamic words and arguments after `--` are not expanded or checked.
+- Ambiguous value rules or positional tails containing unchecked flags produce warnings. Positional grammar and arguments after `--` remain unchecked without reference rules. A simple quoted scalar can fill an unrestricted string value, but its contents are never evaluated.
 
 All help-based checks are partial. Help cannot establish complete grammar or hidden entries.
 Required flags, positional bounds, deprecation, removal, and replacements are not inferred.
@@ -29,21 +39,44 @@ No examples, substitutions, or variable expansions are executed; documents are n
 Text reports show errors, warnings, and concrete gaps such as skipped arguments, grouped by source command, followed by counts and coverage.
 Use `--verbose` for all INFO messages, target CLI/version/OS, evidence, and diagnostic certainty.
 INFO describes incomplete checking, not a successful validation.
-Coverage distinguishes partial checks from uncheckable examples; no result claims full validation.
-JSON always includes all diagnostics and collection details, regardless of `--verbose`, using schema version `2`.
+An unambiguous synopsis can establish argument counts, repeated operands, and explicit flag-selected modes.
+Ambiguous alternatives and flag/operand dependencies do not acquire guessed bounds.
+Help-derived mismatches need review rather than proving the CLI is invalid.
+Option ordering remains unknown unless established by its source.
+
+Coverage distinguishes `checked` against documented argument rules, `partial`, and `uncheckable`.
+`checked` can include confirmed rule violations; it does not establish runtime success or reference accuracy.
+JSON includes all diagnostics, source evidence, and collection details using schema version `3`.
+Every incomplete result has `requirements` describing what is needed for a new check.
+Strict or verbose text output shows those requirements as well; they never change the coverage verdict.
 
 | Exit code | Meaning |
 | --- | --- |
 | `0` | No findings reach the threshold |
-| `1` | Findings reach the threshold |
+| `1` | Findings reach the threshold, or required coverage is incomplete |
 | `2` | Operational failure |
 
 `warning` fails on warnings or errors. `none` disables finding-based failures.
-Exit code `0` does not mean that every example was checked. Always inspect coverage.
+`--require-complete` separately rejects partial or uncheckable results and scans with no examples.
+It shows all checking gaps even without `--verbose`.
+Without that option, exit code `0` does not mean every example was checked.
+
+## Reference-backed checks
+
+[Reference specifications](references.md) provide explicit target versions, sources, and argument rules without needing installed executables.
+They can describe positional counts, required or incompatible flags, ordering, and argv forwarding.
+Missing or ambiguous rules remain gaps. Nested commands in argument, assignment, or redirection substitutions also leave gaps.
+No expression is evaluated to resolve them.
+
+With `--spec`, live collection is disabled unless `--allow-live-help` permits fallback for CLIs absent from the references.
+The same policy applies to forwarded children; wrappers are resolved without being run.
+`--export-spec` writes supplied references and successful help snapshots as a starting point, without inventing complete grammar.
 
 ## Collection and caching
 
-The scanner queries each executable's version once per run.
+For live collection, the scanner queries each executable's version once per run.
+For macOS `xattr`, which has no version query, it checks `--help` and reports the version as `unknown`.
+Its cache is invalidated by changes to executable metadata.
 It reuses successful help when the version and executable metadata are unchanged,
 and extends the cache when new examples need additional commands.
 Examples that resolve to the same executable share its cache, including `npx`
@@ -55,9 +88,13 @@ Collection starts with root help, then follows advertised subcommands reached
 while checking the examples. An unlisted command name triggers a bounded search
 of advertised sibling help for aliases. Alias resolution requires the sibling search
 to finish without conflicts; incomplete searches leave a review warning.
-The unlisted name itself, flag values,
-positional arguments, dynamic words, and forwarded arguments are never used as help requests.
+Unlisted names, flag values, operands, and unknown tails are not appended to help requests.
+When a reference explicitly declares argv forwarding, the child executable can receive its own bounded metadata requests under the selected collection policy.
+Its document arguments are not executed or passed to a help request.
 Most CLIs use `-h`, then `--help` as a fallback.
+If short help explicitly says to see more with `--help`, the longer page is requested within the same budget.
+Usable short help is retained if the longer page fails or the budget is exhausted.
+Curl uses `--help all` to include options omitted from its default help menu.
 Limits are three levels and 100 help calls per executable per scan, including failed calls.
 Alias discovery has a separate 100-call budget so it cannot exhaust normal collection.
 Each call allows ten seconds and 1 MiB of combined output, with no interactive input.
@@ -65,6 +102,11 @@ For Homebrew, `brew commands --quiet` lists commands and `brew help <command>`
 collects their help within the same limits.
 For Go, `version`, `help`, and `help <command>` are used instead;
 automatic toolchain downloads are disabled.
+A page that refers to `go help build` can establish command usage,
+but flags described only on the referenced page remain unverified.
+For Nix, `--help` pages provide command lists, options, and explicitly documented aliases.
+BSD tar and Determinate Nix version output may include library or distribution versions;
+these are distinguished from the CLI version.
 
 Common static `sudo` and bare-executable `npx` forms resolve to the inner CLI.
 Neither wrapper runs, and no packages are installed.

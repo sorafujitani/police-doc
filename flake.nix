@@ -16,7 +16,7 @@
             version = "unstable-${self.shortRev or "dirty"}";
             src = pkgs.lib.fileset.toSource {
               root = ./.;
-              fileset = pkgs.lib.fileset.unions [ ./go.mod ./go.sum ./cmd ./internal ];
+              fileset = pkgs.lib.fileset.unions [ ./go.mod ./go.sum ./cmd ./internal ./examples/specs ];
             };
             vendorHash = "sha256-HRj/icLduEOwbg+KN5Dk24xljVh9WEZ7HUJxG0jih5s=";
             subPackages = [ "cmd/policedoc" ];

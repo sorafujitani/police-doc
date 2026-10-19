@@ -117,7 +117,7 @@ OPTIONS
 		t.Fatal("indented prose became a declared flag")
 	}
 	command = parseHelp("Options:\n      --long FILE\n  -s, --short FILE\n      --last FILE\n")
-	if len(command.Flags) != 4 {
+	if len(command.Flags) != 3 || command.Flag("-s") != command.Flag("--short") {
 		t.Fatalf("aligned getopt columns lost declarations: %+v", command.Flags)
 	}
 }

@@ -102,6 +102,9 @@ Options:
 			flags := make(map[string]string)
 			for _, flag := range command.Flags {
 				flags[flag.Name] = flag.Value
+				for _, alias := range flag.Aliases {
+					flags[alias] = flag.Value
+				}
 			}
 			var commands []string
 			for _, child := range command.Commands {
@@ -148,6 +151,7 @@ func TestCollectHelpVersions(t *testing.T) {
 	for _, tc := range []struct{ output, want string }{
 		{"v24.21.0", "24.21.0"},
 		{"acme version 1.2.3", "1.2.3"},
+		{"acme v1.2.3 using runtime v4.5.6", "1.2.3"},
 		{"acme v1.2.3-rc.1+build.7", "1.2.3-rc.1+build.7"},
 	} {
 		t.Run(tc.output, func(t *testing.T) {
@@ -187,7 +191,7 @@ esac
 		t.Fatalf("unexpected calls: %q %v", calls, err)
 	}
 	run := snapshot.Root.Child("container").Child("run")
-	if snapshot.Tool != "acme" || snapshot.Version != "1.2.3-beta.1" || snapshot.OS != runtime.GOOS || len(snapshot.Sources) != 4 || len(run.Flags) != 2 || run.Flags[0].Value != "required" || len(run.Sources) != 1 {
+	if snapshot.Tool != "acme" || snapshot.Version != "1.2.3-beta.1" || snapshot.OS != runtime.GOOS || len(snapshot.Sources) != 4 || len(run.Flags) != 1 || run.Flag("-o") != run.Flag("--output") || run.Flags[0].Value != "required" || len(run.Sources) != 1 {
 		t.Fatalf("unexpected snapshot: %+v; run=%+v", snapshot, run)
 	}
 }
@@ -536,7 +540,7 @@ func TestCollectHelpFailures(t *testing.T) {
 	for _, tc := range []struct{ name, script, want string }{
 		{"version", `printf 'version unavailable\n'`, "single CLI version"},
 		{"version-exit", `printf 'acme 1.0.0\n'; exit 1`, "exit status"},
-		{"ambiguous-version", `printf 'acme v1.2.3 using runtime v4.5.6\n'`, "single CLI version"},
+		{"ambiguous-version", `printf 'runtime v4.5.6; acme v1.2.3\n'`, "single CLI version"},
 		{"empty", `if [ "$1" = --version ]; then echo 1.0.0; fi`, "could not recognize help"},
 		{"banner", `if [ "$1" = --version ]; then echo 1.0.0; else echo 'not a help page'; fi`, "could not recognize help"},
 		{"empty-usage", `if [ "$1" = --version ]; then echo 1.0.0; else printf 'Usage:\n\nOptions:\n'; fi`, "Usage does not describe"},

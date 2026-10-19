@@ -30,20 +30,27 @@ type AliasRequest struct {
 
 type Result struct {
 	// HelpPath requests missing help for an advertised command, not document argv.
-	HelpPath    []string         `json:"-"`
-	Alias       *AliasRequest    `json:"-"`
-	Location    extract.Location `json:"location"`
-	Command     string           `json:"command"`
-	CLI         string           `json:"cli,omitempty"`
-	Version     string           `json:"version,omitempty"`
-	OS          string           `json:"os,omitempty"`
-	Coverage    string           `json:"coverage"`
-	Diagnostics []Diagnostic     `json:"diagnostics"`
+	HelpPath     []string          `json:"-"`
+	Alias        *AliasRequest     `json:"-"`
+	Forwarded    []extract.Example `json:"-"`
+	OwnChecked   bool              `json:"-"`
+	Location     extract.Location  `json:"location"`
+	Command      string            `json:"command"`
+	CLI          string            `json:"cli,omitempty"`
+	Version      string            `json:"version,omitempty"`
+	OS           string            `json:"os,omitempty"`
+	Shell        string            `json:"shell,omitempty"`
+	Coverage     string            `json:"coverage"`
+	SpecSource   string            `json:"spec_source,omitempty"`
+	Evidence     []spec.Evidence   `json:"evidence,omitempty"`
+	Diagnostics  []Diagnostic      `json:"diagnostics"`
+	Requirements []Requirement     `json:"requirements,omitempty"`
 }
 
 type Summary struct {
 	Files       int `json:"files"`
 	Examples    int `json:"examples"`
+	Checked     int `json:"checked"`
 	Partial     int `json:"partial"`
 	Uncheckable int `json:"uncheckable"`
 	Errors      int `json:"errors"`
@@ -51,15 +58,17 @@ type Summary struct {
 }
 
 type Report struct {
-	SchemaVersion int               `json:"schema_version"`
-	Environment   map[string]string `json:"environment"`
-	Summary       Summary           `json:"summary"`
-	Results       []Result          `json:"results"`
+	SchemaVersion    int               `json:"schema_version"`
+	Environment      map[string]string `json:"environment"`
+	Summary          Summary           `json:"summary"`
+	CoverageComplete bool              `json:"coverage_complete"`
+	RequireComplete  bool              `json:"require_complete,omitempty"`
+	Results          []Result          `json:"results"`
 }
 
 func NewReport(files int) *Report {
 	return &Report{
-		SchemaVersion: 2,
+		SchemaVersion: 3,
 		Environment:   map[string]string{"os": runtime.GOOS, "arch": runtime.GOARCH},
 		Summary:       Summary{Files: files},
 		Results:       []Result{},
@@ -67,14 +76,18 @@ func NewReport(files int) *Report {
 }
 
 func (report *Report) Add(result Result) {
+	result.Requirements = requirements(result)
 	report.Results = append(report.Results, result)
 	report.Summary.Examples++
 	switch result.Coverage {
+	case "checked":
+		report.Summary.Checked++
 	case "partial":
 		report.Summary.Partial++
 	case "uncheckable":
 		report.Summary.Uncheckable++
 	}
+	report.CoverageComplete = report.Summary.Checked == report.Summary.Examples
 	for _, diagnostic := range result.Diagnostics {
 		switch diagnostic.Severity {
 		case "error":
@@ -98,8 +111,17 @@ func (report *Report) Write(writer io.Writer, format string, verbose bool) error
 	var text strings.Builder
 	for _, result := range report.Results {
 		shown := false
+		if verbose && result.Coverage == "checked" && len(result.Diagnostics) == 0 {
+			fmt.Fprintf(&text, "%s:%d:%d\n  %s\n", terminalText(result.Location.File), result.Location.Line, result.Location.Column, terminalText(result.Command))
+			fmt.Fprintf(&text, "  Target: %s %s (os=%s, source=%s)\n", terminalText(result.CLI), terminalText(result.Version), terminalText(cmp.Or(result.OS, "any")), terminalText(result.SpecSource))
+			text.WriteString("  Checked against the supplied argument rules; runtime behavior is not verified.\n")
+			for _, evidence := range result.Evidence {
+				fmt.Fprintf(&text, "    Evidence (%s): %s\n", terminalText(evidence.Kind), terminalText(evidence.Reference))
+			}
+			shown = true
+		}
 		for _, diagnostic := range result.Diagnostics {
-			if diagnostic.Severity == "info" && !verbose {
+			if diagnostic.Severity == "info" && !verbose && !report.RequireComplete {
 				switch diagnostic.Code {
 				case "dynamic-argument", "unchecked-arguments", "unchecked-positionals", "forwarded-arguments":
 					// Concrete gaps remain visible without verbose evidence output.
@@ -133,6 +155,11 @@ func (report *Report) Write(writer io.Writer, format string, verbose bool) error
 			}
 		}
 		if shown {
+			if verbose || report.RequireComplete {
+				for _, need := range result.Requirements {
+					fmt.Fprintf(&text, "  Required (%s): %s\n", terminalText(need.Kind), terminalText(need.Action))
+				}
+			}
 			text.WriteByte('\n')
 		}
 	}
@@ -141,11 +168,18 @@ func (report *Report) Write(writer io.Writer, format string, verbose bool) error
 	if s.Examples == 0 {
 		text.WriteString("No supported shell examples found.\n")
 	} else {
-		fmt.Fprintf(&text, "Coverage: %d partially checked, %d uncheckable.", s.Partial, s.Uncheckable)
+		text.WriteString("Coverage: ")
+		if s.Checked > 0 {
+			fmt.Fprintf(&text, "%d checked against explicit argument rules, ", s.Checked)
+		}
+		fmt.Fprintf(&text, "%d partially checked, %d uncheckable.", s.Partial, s.Uncheckable)
 		if !verbose {
 			text.WriteString(" Use --verbose for details.")
 		}
 		text.WriteByte('\n')
+	}
+	if report.RequireComplete && !report.CoverageComplete {
+		text.WriteString("Incomplete coverage: --require-complete rejects this scan, even when there are no syntax errors.\n")
 	}
 	_, err := io.WriteString(writer, text.String())
 	return err

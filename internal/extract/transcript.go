@@ -14,10 +14,14 @@ func shellBody(lines []string, origins []origin, prompted bool) (string, bool) {
 	for i, line := range lines {
 		if prompted {
 			trimmed := strings.TrimLeft(line, " \t")
-			if strings.HasPrefix(trimmed, "$ ") || strings.HasPrefix(trimmed, "> ") {
-				origins[i].removed = len(line) - len(trimmed) + 2
-				line = trimmed[2:]
-				if strings.HasPrefix(trimmed, "$ ") {
+			width := 2
+			if strings.HasPrefix(trimmed, "❯ ") {
+				width = len("❯ ")
+			}
+			if strings.HasPrefix(trimmed, "$ ") || strings.HasPrefix(trimmed, "> ") || strings.HasPrefix(trimmed, "❯ ") {
+				origins[i].removed = len(line) - len(trimmed) + width
+				line = trimmed[width:]
+				if strings.HasPrefix(trimmed, "$ ") || strings.HasPrefix(trimmed, "❯ ") {
 					prompts = append(prompts, i)
 				}
 			}

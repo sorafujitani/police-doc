@@ -14,7 +14,7 @@ import (
 )
 
 // Bump when the cache layout or collector's interpretation changes.
-const helpCacheVersion = 11
+const helpCacheVersion = 14
 
 type cachedHelp struct {
 	SchemaVersion int            `json:"schema_version"`
@@ -86,12 +86,16 @@ func loadHelpCache(path, tool string) (cachedHelp, error) {
 }
 
 func writeHelpCache(path string, cached cachedHelp) error {
-	data, err := json.MarshalIndent(cached, "", "  ")
+	return writeJSONFile(path, cached)
+}
+
+func writeJSONFile(path string, value any) error {
+	data, err := json.MarshalIndent(value, "", "  ")
 	if err != nil {
 		return err
 	}
 	if len(data) > 8<<20 {
-		return fmt.Errorf("help cache exceeds 8 MiB")
+		return fmt.Errorf("specification exceeds 8 MiB")
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err

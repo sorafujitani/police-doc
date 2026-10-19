@@ -13,13 +13,22 @@ func (example Example) CLI() string {
 	return path.Base(example.Words[0].Value)
 }
 
-// unwrap only interprets known wrapper syntax; it never invokes a wrapper.
+// unwrap classifies shell builtins before resolving wrapper prefixes.
 func unwrap(example Example) Example {
 	if example.Reason != "" {
 		return example
 	}
 	if len(example.Words) > 0 && example.Words[0].Static && shellBuiltin(example.Words[0].Value) {
 		example.Code, example.Reason = "shell-builtin", "Shell builtins are not checked against external CLI help."
+		return example
+	}
+	return ResolveWrappers(example)
+}
+
+// ResolveWrappers also handles forwarded argv, where a bare name such as echo
+// denotes an external executable rather than a shell builtin. It never runs a wrapper.
+func ResolveWrappers(example Example) Example {
+	if example.Reason != "" {
 		return example
 	}
 	for example.CLI() == "sudo" || example.CLI() == "npx" {

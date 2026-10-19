@@ -21,15 +21,18 @@ type Location struct {
 type Word struct {
 	Value  string
 	Static bool
+	// Scalar means an unevaluated expression still contributes exactly one word.
+	Scalar bool
 }
 
 type Example struct {
-	Location     Location
-	Text         string
-	Words        []Word
-	LocalPackage bool // npx: prefer an installed project-local executable when collecting help.
-	Reason       string
-	Code         string
+	Location        Location
+	Text            string
+	Words           []Word
+	LocalPackage    bool // npx: prefer an installed project-local executable when collecting help.
+	Reason          string
+	Code            string
+	HasSubstitution bool
 }
 
 type origin struct {
@@ -56,12 +59,12 @@ func Markdown(path string, source []byte) []Example {
 			return ast.WalkContinue, nil
 		}
 		language := string(block.Language(source))
-		if language != "sh" && language != "bash" && language != "console" {
+		if language != "sh" && language != "bash" && language != "shell" && language != "console" && language != "" {
 			return ast.WalkSkipChildren, nil
 		}
 		var lines []string
 		var origins []origin
-		hasPrompt, promptStyleKnown := false, false
+		hasPrompt, promptStyleKnown, ambiguousInput := false, false, false
 		for i := range block.Lines().Len() {
 			segment := block.Lines().At(i)
 			line := string(segment.Value(source))
@@ -69,11 +72,25 @@ func Markdown(path string, source []byte) []Example {
 			origins = append(origins, origin{offset: segment.Start, padding: segment.Padding})
 			trimmed := strings.TrimSpace(line)
 			if !promptStyleKnown && trimmed != "" && !strings.HasPrefix(trimmed, "#") {
-				hasPrompt = strings.HasPrefix(strings.TrimLeft(line, " \t"), "$ ")
+				hasPrompt = strings.HasPrefix(trimmed, "$ ") || strings.HasPrefix(trimmed, "❯ ")
+				// A leading '>' could be either a prompt (fd's README) or a
+				// shell redirection. Never interpret its output as commands.
+				ambiguousInput = strings.HasPrefix(trimmed, "> ")
+				if language == "console" {
+					label, _, _ := strings.Cut(trimmed, ":")
+					switch strings.ToLower(label) {
+					case "warning", "error", "fatal", "usage":
+						ambiguousInput = true // Diagnostic-only terminal output.
+					}
+				}
 				promptStyleKnown = true
 			}
 		}
+		if language == "" && !hasPrompt {
+			return ast.WalkSkipChildren, nil // Do not guess the language of unlabelled data.
+		}
 		body, ambiguous := shellBody(lines, origins, hasPrompt)
+		ambiguous = ambiguous || ambiguousInput
 		parser := syntax.NewParser(syntax.Variant(syntax.LangBash))
 		file, err := parser.Parse(strings.NewReader(body), path)
 		locate := func(pos syntax.Pos) Location {
@@ -107,17 +124,56 @@ func Markdown(path string, source []byte) []Example {
 			return ast.WalkSkipChildren, nil
 		}
 		if ambiguous {
-			examples = append(examples, Example{Location: locate(file.Pos()), Text: strings.TrimSpace(body), Code: "unsupported-shell", Reason: "Prompted multiline input is ambiguous; no commands were extracted."})
+			examples = append(examples, Example{Location: locate(file.Pos()), Text: strings.TrimSpace(body), Code: "unsupported-shell", Reason: "Shell input and terminal output are ambiguous; no commands were extracted."})
 			return ast.WalkSkipChildren, nil
+		}
+		bindings := shellBindings(file)
+		substitutions := make(map[*syntax.CallExpr]bool)
+		handledSubstitutions := make(map[syntax.Node]bool)
+		markSubstitutions := func(node syntax.Node) bool {
+			found := false
+			syntax.Walk(node, func(node syntax.Node) bool {
+				switch node.(type) {
+				case *syntax.CmdSubst, *syntax.ProcSubst:
+					handledSubstitutions[node], found = true, true
+					return false
+				}
+				return true
+			})
+			return found
+		}
+		recordSubstitutionGap := func(node syntax.Node) {
+			examples = append(examples, Example{Location: locate(node.Pos()), Text: nodeText(body, node), Code: "unchecked-substitution", Reason: "Commands inside a substitution were not checked; no substitution was executed."})
 		}
 		syntax.Walk(file, func(node syntax.Node) bool {
 			switch node.(type) {
 			case *syntax.CmdSubst, *syntax.ProcSubst:
-				return false // Substitutions are never independent examples, including in redirects.
+				if !handledSubstitutions[node] {
+					recordSubstitutionGap(node)
+				}
+				return false // No nested command is evaluated or invoked.
 			}
 			if statement, ok := node.(*syntax.Stmt); ok {
-				switch statement.Cmd.(type) {
-				case nil, *syntax.CallExpr, *syntax.BinaryCmd:
+				switch command := statement.Cmd.(type) {
+				case *syntax.CallExpr:
+					substitutions[command] = markSubstitutions(statement)
+				case *syntax.DeclClause:
+					example := declarationExample(body, command, locate(command.Pos()))
+					example.HasSubstitution = markSubstitutions(statement)
+					examples = append(examples, example)
+					return false
+				case nil:
+					if markSubstitutions(statement) {
+						recordSubstitutionGap(statement)
+					}
+				case *syntax.BinaryCmd, *syntax.Block, *syntax.Subshell, *syntax.IfClause,
+					*syntax.WhileClause, *syntax.ForClause, *syntax.CaseClause, *syntax.FuncDecl, *syntax.TimeClause:
+					// Inspect bodies independently of whether control flow would run them.
+					for _, redirect := range statement.Redirs {
+						if markSubstitutions(redirect) {
+							recordSubstitutionGap(redirect)
+						}
+					}
 				default:
 					examples = append(examples, Example{Location: locate(statement.Pos()), Text: nodeText(body, statement), Code: "unsupported-shell", Reason: "Compound shell statements are not supported."})
 					return false
@@ -128,18 +184,27 @@ func Markdown(path string, source []byte) []Example {
 				return true
 			}
 			if len(call.Args) == 0 {
-				return false // An assignment alone is not a CLI example.
+				if substitutions[call] {
+					recordSubstitutionGap(call)
+				}
+				return false // Plain assignments are not CLI examples; substitutions still leave a gap.
 			}
-			example := Example{Location: locate(call.Args[0].Pos()), Text: nodeText(body, call)}
+			example := Example{Location: locate(call.Args[0].Pos()), Text: nodeText(body, call), HasSubstitution: substitutions[call]}
 			for _, arg := range call.Args {
 				syntax.SplitBraces(arg)
 				value, static := literal(arg.Parts, false)
-				example.Words = append(example.Words, Word{Value: value, Static: static})
+				example.Words = append(example.Words, Word{Value: value, Static: static, Scalar: !static && scalar(arg.Parts, false)})
 			}
 			for _, assignment := range call.Assigns {
 				if assignment.Name != nil && assignment.Name.Value == "PATH" {
 					example.Code, example.Reason = "unsupported-environment", "The example changes PATH; it was not applied, so the executable and its arguments were not checked."
 				}
+			}
+			if len(example.Words) > 0 && example.Words[0].Static && strings.HasPrefix(example.Words[0].Value, "-") {
+				example.Code, example.Reason = "argument-fragment", "This block starts with options rather than an executable; its owning CLI or configuration format must be specified."
+			}
+			if len(example.Words) > 0 && example.Words[0].Static && bindings[example.Words[0].Value] {
+				example.Code, example.Reason = "shell-binding", "This name is defined as a shell function or alias in the document; an unrelated installed executable was not used."
 			}
 			examples = append(examples, unwrap(example))
 			return false // Do not treat nested substitutions as independent examples.
@@ -147,6 +212,18 @@ func Markdown(path string, source []byte) []Example {
 		return ast.WalkSkipChildren, nil
 	})
 	return examples
+}
+
+func containsSubstitution(node syntax.Node) bool {
+	found := false
+	syntax.Walk(node, func(node syntax.Node) bool {
+		switch node.(type) {
+		case *syntax.CmdSubst, *syntax.ProcSubst:
+			found = true
+		}
+		return !found
+	})
+	return found
 }
 
 func nodeText(body string, node syntax.Node) string {
@@ -157,7 +234,43 @@ func nodeText(body string, node syntax.Node) string {
 	return strings.TrimSpace(body[start:end])
 }
 
+// Scalar shape is independent of value: quoted substitutions do not undergo
+// word splitting. "$@" and unquoted expansions can still contribute many words.
+func scalar(parts []syntax.WordPart, quoted bool) bool {
+	for _, part := range parts {
+		switch part := part.(type) {
+		case *syntax.Lit:
+			if !quoted && strings.ContainsAny(part.Value, "*?[") {
+				return false
+			}
+		case *syntax.SglQuoted:
+		case *syntax.DblQuoted:
+			if part.Dollar || !scalar(part.Parts, true) {
+				return false
+			}
+		case *syntax.ParamExp:
+			if !quoted || part.Param == nil || part.Param.Value == "@" || part.Index != nil || part.Excl ||
+				part.Exp != nil || part.Slice != nil || part.Repl != nil || part.Names != 0 ||
+				part.NestedParam != nil || part.Flags != nil || len(part.Modifiers) != 0 {
+				return false
+			}
+		case *syntax.CmdSubst:
+			if !quoted {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 func literal(parts []syntax.WordPart, quoted bool) (string, bool) {
+	if len(parts) == 1 {
+		if part, ok := parts[0].(*syntax.Lit); ok && part.Value == "[" {
+			return "[", true
+		}
+	}
 	var value strings.Builder
 	for _, part := range parts {
 		switch part := part.(type) {

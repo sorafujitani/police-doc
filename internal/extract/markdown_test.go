@@ -104,8 +104,6 @@ func TestLiteralAndDynamicWords(t *testing.T) {
 func TestUncheckableShell(t *testing.T) {
 	for _, tc := range []struct{ body, code string }{
 		{"acme 'unterminated", "invalid-shell"},
-		{"for f in *.md; do acme publish \"$f\"; done", "unsupported-shell"},
-		{"(acme status)", "unsupported-shell"},
 	} {
 		examples := Markdown("doc.md", []byte("```bash\n"+tc.body+"\n```\n"))
 		if len(examples) != 1 || examples[0].Code != tc.code || examples[0].Reason == "" {

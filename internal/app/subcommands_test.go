@@ -44,7 +44,7 @@ esac
 		if err := json.Unmarshal([]byte(output), &report); err != nil {
 			t.Fatal(err)
 		}
-		if code != 1 || stderr != "" || report.Summary.Warnings != 2 || report.Summary.Errors != 0 || report.Summary.Partial != 3 {
+		if code != 1 || stderr != "" || report.Summary.Warnings != 2 || report.Summary.Errors != 0 || report.Summary.Partial != 2 || report.Summary.Checked != 1 {
 			t.Fatalf("refresh=%v: exit=%d report=%+v stderr=%s", refresh, code, report, stderr)
 		}
 		for i, parent := range []string{"acme -h", "acme auth -h"} {

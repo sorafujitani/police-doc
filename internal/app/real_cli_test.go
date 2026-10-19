@@ -28,6 +28,12 @@ func TestRealCLIHelpAndScan(t *testing.T) {
 		{"python3", `python3 -c "print(1)"`, ""},
 		{"uv", "uv --quiet --version", "uv pip install --python"},
 		{"rg", "rg -e pattern .", "rg -e"},
+		{"rg", "rg --type-list", ""},
+		{"curl", "curl -fsSL -o output https://example.org/", "curl --output"},
+		{"fd", "fd --strip-cwd-prefix -t f", "fd --extension"},
+		{"bat", "bat --color=always file.txt", "bat --file-name"},
+		{"fzf", "fzf --query pattern", "fzf --query"},
+		{"rustup", "rustup target add x86_64-unknown-linux-musl", ""},
 		{"brew", "brew tap --force sorafujitani/memoli", ""},
 		{"npm", "npm install -g @sorafujitani/memoli", "npm install --workspace"},
 		{"brew", "brew install --formula memoli", ""},
@@ -62,8 +68,15 @@ func TestRealCLIHelpAndScan(t *testing.T) {
 			if strings.Contains(out.String(), "help-incomplete") {
 				t.Fatalf("requested help was not collected: %s", out.String())
 			}
-			if report.Summary.Errors != wantErrors || report.Summary.Partial != wantExamples || report.Summary.Uncheckable != 0 {
+			if report.Summary.Errors != wantErrors || report.Summary.Partial+report.Summary.Checked != wantExamples || report.Summary.Uncheckable != 0 {
 				t.Fatalf("unexpected summary: %+v\n%s", report.Summary, out.String())
+			}
+			// Incomplete grammar may still be uncheckable, but known-good input
+			// must not be rejected or treated as an unlisted flag/command.
+			if slices.ContainsFunc(report.Results[0].Diagnostics, func(d check.Diagnostic) bool {
+				return d.Severity == "error" || d.Status == "needs-review"
+			}) {
+				t.Fatalf("known-good example produced a rejection or review warning: %+v", report.Results[0])
 			}
 			for _, result := range report.Results {
 				if result.CLI != tc.tool || result.Version == "" || result.Location.File != doc {

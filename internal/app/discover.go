@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/sorafujitani/police-doc/internal/check"
@@ -24,13 +25,41 @@ type collectedHelp struct {
 }
 
 type collectionOptions struct {
-	CacheDir string
-	Refresh  bool
+	CacheDir      string
+	Refresh       bool
+	References    map[string]*spec.Snapshot
+	ReferenceOnly bool
+	depth         int
 }
 
 func collectAndCheck(ctx context.Context, example extract.Example, cache map[string]*collectedHelp, options collectionOptions) (check.Result, error) {
+	if err := ctx.Err(); err != nil {
+		return check.Result{}, err
+	}
+	referenceExample := example
+	builtin := example.Code == "shell-builtin"
+	if builtin {
+		referenceExample.Code, referenceExample.Reason = "", ""
+	}
+	key := referenceExample.CLI()
+	if builtin {
+		key = spec.TargetKey(key, "bash")
+	}
+	if reference := options.References[key]; reference != nil {
+		result := check.Example(referenceExample, reference)
+		result.SpecSource = "reference"
+		return checkForwarded(ctx, result, cache, options)
+	}
+	if builtin && !options.ReferenceOnly {
+		return collectBuiltin(ctx, referenceExample, cache, options)
+	}
 	if example.Reason != "" || example.CLI() == "" {
 		return check.Example(example, nil), ctx.Err()
+	}
+	if options.ReferenceOnly {
+		result := check.Example(example, nil)
+		result.Diagnostics = append(result.Diagnostics, check.Diagnostic{Severity: "warning", Status: "uncheckable", Code: "missing-reference", Message: fmt.Sprintf("No reference was supplied for %q; no executable was started. Use --allow-live-help to permit metadata collection.", example.CLI()), Evidence: []spec.Evidence{}})
+		return result, nil
 	}
 	collected := discoverHelp(ctx, example, cache, options)
 	result := check.Example(example, collected.Snapshot)
@@ -78,6 +107,42 @@ func collectAndCheck(ctx context.Context, example extract.Example, cache map[str
 			})
 		}
 	}
+	result.SpecSource = "help"
+	return checkForwarded(ctx, result, cache, options)
+}
+
+func checkForwarded(ctx context.Context, result check.Result, cache map[string]*collectedHelp, options collectionOptions) (check.Result, error) {
+	if len(result.Forwarded) == 0 {
+		return result, nil
+	}
+	if options.depth >= 8 {
+		result.Coverage = "partial"
+		result.Diagnostics = append(result.Diagnostics, check.Diagnostic{Severity: "warning", Status: "uncheckable", Code: "forwarding-limit", Message: "Forwarded command nesting exceeds eight levels.", Evidence: []spec.Evidence{}})
+		return result, nil
+	}
+	options.depth++
+	complete := result.OwnChecked
+	for _, example := range result.Forwarded {
+		example = extract.ResolveWrappers(example)
+		child, err := collectAndCheck(ctx, example, cache, options)
+		if err != nil {
+			return check.Result{}, err
+		}
+		complete = complete && child.Coverage == "checked"
+		for _, source := range child.Evidence {
+			if !slices.Contains(result.Evidence, source) {
+				result.Evidence = append(result.Evidence, source)
+			}
+		}
+		for _, diagnostic := range child.Diagnostics {
+			diagnostic.Message = "Forwarded command: " + diagnostic.Message
+			result.Diagnostics = append(result.Diagnostics, diagnostic)
+		}
+	}
+	if complete {
+		result.Coverage = "checked"
+	}
+	result.Forwarded = nil
 	return result, nil
 }
 

@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "tools": [
+    {
+      "tool": "dnf",
+      "version": "dnf5@dc7b57ceaffbb9a73ccfd62ba92d51221dd6d8a4",
+      "os": "linux",
+      "sources": [
+        {
+          "kind": "reference",
+          "reference": "https://raw.githubusercontent.com/rpm-software-management/dnf5/dc7b57ceaffbb9a73ccfd62ba92d51221dd6d8a4/doc/commands/install.8.rst",
+          "detail": "A deliberately small DNF5 reference, selected under the executable name dnf. This is not a DNF4 specification or a complete option catalog. Package existence and package-spec semantics are outside these argument-count rules."
+        }
+      ],
+      "root": {
+        "subcommand_first": true,
+        "commands": [
+          {
+            "name": "install",
+            "flags_after_positionals": true,
+            "forms": [{"min_args": 1}],
+            "flags": [
+              {"name": "--allowerasing", "value": "none"},
+              {"name": "--skip-broken", "value": "none"},
+              {"name": "--skip-unavailable", "value": "none"}
+            ]
+          },
+          {
+            "name": "upgrade",
+            "aliases": ["update", "up"],
+            "flags_after_positionals": true,
+            "forms": [{"min_args": 0}],
+            "sources": [
+              {
+                "kind": "reference",
+                "reference": "https://raw.githubusercontent.com/rpm-software-management/dnf5/dc7b57ceaffbb9a73ccfd62ba92d51221dd6d8a4/doc/commands/upgrade.8.rst",
+                "detail": "The package/group/environment operands are optional and repeatable. Other upgrade options are intentionally not modeled."
+              },
+              {
+                "kind": "reference",
+                "reference": "https://raw.githubusercontent.com/rpm-software-management/dnf5/dc7b57ceaffbb9a73ccfd62ba92d51221dd6d8a4/dnf5/config/usr/share/dnf5/aliases.d/compatibility.conf",
+                "detail": "The update and up aliases forward to upgrade without adding arguments."
+              }
+            ]
+          },
+          {
+            "name": "config-manager",
+            "subcommand_first": true,
+            "sources": [
+              {
+                "kind": "reference",
+                "reference": "https://raw.githubusercontent.com/rpm-software-management/dnf5/dc7b57ceaffbb9a73ccfd62ba92d51221dd6d8a4/doc/dnf5_plugins/config-manager.8.rst",
+                "detail": "The addrepo --from-repofile form has no positional arguments. The alternative --set mode and other subcommands are intentionally not modeled."
+              }
+            ],
+            "commands": [
+              {
+                "name": "addrepo",
+                "flags_after_positionals": true,
+                "forms": [{"min_args": 0, "max_args": 0, "required_flags": ["--from-repofile"]}],
+                "flags": [
+                  {"name": "--from-repofile", "value": "required"},
+                  {"name": "--overwrite", "value": "none"},
+                  {"name": "--create-missing-dir", "value": "none"},
+                  {"name": "--save-filename", "value": "required"}
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

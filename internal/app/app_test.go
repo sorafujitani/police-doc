@@ -68,8 +68,8 @@ func TestScanExitCodesAndInterspersedOptions(t *testing.T) {
 			if err := json.Unmarshal([]byte(output), &report); err != nil {
 				t.Fatal(err)
 			}
-			if report.SchemaVersion != 2 || report.Summary.Files != 1 || report.Summary.Examples != 1 ||
-				report.Summary.Partial != 1 || report.Results[0].Location.Line != 4 || report.Results[0].Version != "1.0.0" {
+			if report.SchemaVersion != 3 || report.Summary.Files != 1 || report.Summary.Examples != 1 ||
+				report.Summary.Partial+report.Summary.Checked != 1 || report.Results[0].Location.Line != 4 || report.Results[0].Version != "1.0.0" {
 				t.Fatalf("unexpected report: %+v", report)
 			}
 		})
@@ -97,12 +97,12 @@ func TestScanTextVerbosity(t *testing.T) {
 			if code != tc.wantCode || stderr != "" {
 				t.Fatalf("exit=%d stderr=%q output=%s", code, stderr, output)
 			}
-			for _, detail := range []string{"INFO ", "Target:", "Evidence"} {
+			for _, detail := range []string{"Target:", "Evidence"} {
 				if strings.Contains(output, detail) != tc.verbose {
 					t.Fatalf("verbose=%v: unexpected visibility of %q: %s", tc.verbose, detail, output)
 				}
 			}
-			if !strings.Contains(output, "Coverage: 1 partially checked, 0 uncheckable.") {
+			if !strings.Contains(output, "Coverage: 1 checked against explicit argument rules, 0 partially checked, 0 uncheckable.") {
 				t.Fatalf("hidden INFO must not hide coverage: %s", output)
 			}
 			if tc.wantCode == 0 && strings.Contains(output, tc.body) {

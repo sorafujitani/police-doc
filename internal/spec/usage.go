@@ -22,6 +22,9 @@ func helpSynopses(output string) [][]string {
 			flush()
 			usage = true
 			line = line[match[1]:]
+		} else if usage && strings.HasPrefix(strings.TrimSpace(line), "or:") {
+			flush() // GNU help lists alternative invocations with an "or:" prefix.
+			line = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "or:"))
 		} else {
 			trimmed := strings.TrimSpace(line)
 			if trimmed == "" {
@@ -50,8 +53,14 @@ func helpSynopses(output string) [][]string {
 		if len(fields) == 0 {
 			continue
 		}
-		if len(words) > 0 && filepath.Base(fields[0]) == filepath.Base(words[0]) {
-			flush()
+		if len(words) > 0 {
+			if filepath.Base(fields[0]) == filepath.Base(words[0]) {
+				flush()
+			} else if line == strings.TrimLeft(line, " \t") {
+				flush() // GNU tools put unindented prose immediately after Usage.
+				usage = false
+				continue
+			}
 		}
 		words = append(words, fields...)
 	}
